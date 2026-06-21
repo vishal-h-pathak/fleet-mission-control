@@ -7,6 +7,7 @@ import type { Job, JobMetric, MachineStatus } from "@/lib/types";
 import { deriveStatus } from "@/lib/format";
 import MachineCard from "./MachineCard";
 import LiveIndicator, { type ConnState } from "./LiveIndicator";
+import DispatchPanel from "./DispatchPanel";
 
 const RECENTLY_ENDED_MS = 30 * 60 * 1000;
 const SAFETY_REFETCH_MS = 20_000;
@@ -211,6 +212,10 @@ export default function Dashboard({
           )}
         </div>
       </header>
+
+      {/* Authed-only control plane. Unauthed viewers never see the dispatch UI
+          or any command history — fleet_commands is deny-all to anon. */}
+      {initialAuthed && <DispatchPanel machines={machines} />}
 
       {machines.length === 0 ? (
         <p className="rounded-xl border border-white/5 bg-white/[0.02] p-6 text-center text-sm text-zinc-500">

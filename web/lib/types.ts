@@ -87,3 +87,29 @@ export interface JobLog {
   job_id: string;
   log_tail: string | null;
 }
+
+export type CommandStatus =
+  | "pending"
+  | "claimed"
+  | "running"
+  | "done"
+  | "error"
+  | "rejected";
+
+/**
+ * One row of the private `fleet_commands` table (deny-all RLS). Read/written
+ * ONLY by the authed, service-role server routes — never anon, never public.
+ */
+export interface FleetCommand {
+  id: string;
+  machine_id: string;
+  verb: string;
+  args: Record<string, string> | null;
+  status: CommandStatus | string;
+  requested_by: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  finished_at: string | null;
+  result: Record<string, unknown> | null;
+  exit_code: number | null;
+}

@@ -11,6 +11,34 @@ Next.js app — its own Vercel project at `fleet.vishal.pa.thak.io`.
   gate). `GET /api/job/[id]/links` uses the **service-role** key to return
   `rc_url`/`rc_qr` from the private `fleet_job_links` table — only with a valid
   cookie. The public surface never contains `rc_url`.
+- **Command dispatch (authed control plane)**: an authed-only panel (between the
+  header and the machine grid) to dispatch **allowlisted** commands to a machine
+  and watch them run. `fleet_commands` is **deny-all** to anon/authenticated —
+  only the service role, server-side, reads/writes it. Unauthed viewers see no
+  dispatch UI and no history. See below.
+
+## Command dispatch (control plane)
+- `POST /api/command` — body `{ machine_id, verb, args }`. Re-verifies the auth
+  cookie, validates `verb`+`args` against the **shared allowlist**
+  (`lib/commands/allowlist.mjs`), and inserts a `pending` row into
+  `fleet_commands` (service role) with `requested_by:"dashboard"`. Off-list verbs
+  and malformed/hostile args are rejected with `400` — free-text commands are
+  impossible.
+- `GET /api/commands?machine_id=…&limit=…` — returns recent commands + their
+  `status`/`result`/`exit_code` for the panel to **poll** (every 3s). Polling, not
+  realtime: `fleet_commands` is intentionally not in the realtime publication and
+  not anon-readable.
+- Both routes are gated by `middleware.ts` **and** re-verify the cookie in-handler.
+
+### Shared allowlist — single source of truth
+`lib/commands/allowlist.mjs` is **plain ESM (`.mjs`, zero deps)** on purpose: the
+Node control agent (P2-A `agent/allowlist.mjs`) imports the **byte-for-byte
+identical** file the TypeScript dispatch route imports, so the UI and the agent can
+never drift. Types for the route come from the sibling `allowlist.d.mts`. A parity
+test (added at consolidation) asserts the two copies are equal. Verbs in this cut:
+`check`, `status`, `fetch-log {name}`, `pull`, `artifact {relpath, dest?}`. Args
+are whitelisted by name and a strict charset (no shell metacharacters, no `..`, no
+absolute paths). **Never add a free-text / arbitrary-exec verb here.**
 
 ## Stack
 Next.js 16.2.3 (App Router) · React 19 · Tailwind 4 · `@supabase/supabase-js ^2.49` · TypeScript.
@@ -28,7 +56,7 @@ npm run build && npm start   # production build / serve
 |---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | public | Project URL. |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | public | Publishable key; read-only by RLS. |
-| `SUPABASE_SERVICE_ROLE_KEY` | **server-only** | Reads `fleet_job_links`. NEVER prefix with `NEXT_PUBLIC_`. |
+| `SUPABASE_SERVICE_ROLE_KEY` | **server-only** | Reads `fleet_job_links`; reads/writes `fleet_commands`. NEVER prefix with `NEXT_PUBLIC_`. |
 | `FLEET_DASH_PASSWORD` | server-only | Shared dashboard password. |
 | `FLEET_AUTH_SECRET` | server-only | Long random hex; signs the auth cookie. |
 

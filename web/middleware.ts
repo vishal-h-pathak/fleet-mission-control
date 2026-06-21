@@ -3,6 +3,8 @@ import { COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 
 // Gate the authed slice. Sensitive per-job routes that read the private
 // fleet_job_links table: /links returns rc_url/rc_qr, /log returns log_tail.
+// Plus the command control plane: /api/command (dispatch) and /api/commands
+// (history) read/write the deny-all fleet_commands table via the service role.
 // No valid cookie → 401.
 export async function middleware(req: NextRequest) {
   const token = req.cookies.get(COOKIE_NAME)?.value;
@@ -17,5 +19,10 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/api/job/:id/links", "/api/job/:id/log"],
+  matcher: [
+    "/api/job/:id/links",
+    "/api/job/:id/log",
+    "/api/command",
+    "/api/commands",
+  ],
 };
