@@ -1,0 +1,55 @@
+# Fleet Mission Control — roadmap (post P0–P2)
+
+> P0 (monitoring), P1 (logs/metrics), P2 (authed control plane) are built, merged, and live.
+> This is the sequenced plan for everything after. Built chronologically; each phase is a wave
+> of Claude Code sessions (setup-*-wave.sh) + per-machine ops, consolidated via the consolidate
+> prompt. Date: 2026-06-21.
+
+## Where we are
+- **P0** machine cards (online/load/GPU), realtime. **Live.**
+- **P1** per-job fitness sparkline (public) + authed log view. **Live;** sentry's `nav` run imported (70 gens).
+- **P2** authed command queue: dashboard → `fleet_commands` → token-authed agent → `cockpit.sh` →
+  result. Verbs: `check/status/fetch-log/pull/artifact` (read-only/safe). Allowlist drift-guarded
+  by `scripts/check-allowlist-parity.mjs`. Round-trip proven (`check` → sentry → result).
+- Gap: nothing runs continuously yet (Mac reporter offline; sentry reporter in tmux; agent only `--once`).
+
+## Phase A — Operationalize (NEXT)
+Make it run 24/7 and prove the control plane live from the browser. No new features.
+- **Services:** reporter as launchd on Mac + systemd on sentry; agent as launchd on Mac (+ systemd on
+  sentry if/when it should run sentry-local verbs). Both read the repo-root `.env` (Mac uses the
+  mac-cockpit token; sentry the sentry token). Survive reboot.
+- **Live authed dispatch E2E:** log into the deployed dashboard, dispatch `check` to `mac-cockpit`,
+  watch it go `pending→done` with the real result in the UI (the one P2-B path not yet live-exercised).
+- **Docs refresh:** BRIEF status + README to reflect P0–P2 shipped.
+- **Done when:** both machines show continuously online; a browser-dispatched command round-trips.
+
+## Phase B — /rc depth join
+Surface a running Claude Code session's `/remote-control` URL so tapping a job on the phone drops
+into Anthropic's native steering. Plumbing largely exists (reporter `.rc` sidecar →
+`fleet_job_links.rc_url` → dashboard authed "Open in remote control").
+- Add a tiny helper so a launched/started `claude` session writes its `/rc` URL to
+  `$LOG_DIR/<name>.rc`; verify the reporter forwards it and the dashboard surfaces it (authed).
+- Verify tap-through on a phone end to end.
+- **Done when:** a live session's `/rc` link appears on its job card (authed) and opens the session.
+
+## Phase C — Launch verb (control plane's launch capability)
+The original goal: kick off heavy work on a machine from the dashboard/phone. Security-sensitive —
+the first verb that *starts* something rather than reading/pulling.
+- Add a reviewed verb (e.g. `start-nav` / `run`) to BOTH allowlists (parity test must stay green),
+  mapping to `cockpit.sh nav` / `run <repo> "<directive>"` with strict arg validation (repo from a
+  fixed set; directive length-capped; still argv-array, never a shell string).
+- Dashboard dispatch UI gains the verb (authed). Launched Claude sessions emit their `/rc` URL
+  (composes with Phase B → launch from phone, then steer).
+- Keep a hard cap: no arbitrary shell, ever; the directive is data passed to `cockpit.sh run`, which
+  already runs it under `claude` in a tmux session on the box.
+- **Done when:** an authed dispatch starts a run on sentry and its job (+ `/rc` link) appears live.
+
+## Phase D — Polish
+- Notifications when a run finishes (run-done → push/Slack/email — pick a channel).
+- Command history view in the dashboard (authed).
+- GPU/temp telemetry surfaced on cards (data already collected by the reporter).
+- Multi-project grouping; history/retention tuning.
+
+## Deferred infra (revisit anytime)
+- Dedicated Supabase project (org is at the 2-free-project cap today).
+- Clean `fleet.vishal.pa.thak.io` domain (currently the button points at the `vercel.app` URL).

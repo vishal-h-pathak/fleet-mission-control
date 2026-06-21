@@ -5,9 +5,11 @@
 > workstation, phone, future nodes) — monitor what's running, see logs/metrics, and dispatch work,
 > from any device including mobile. Builds directly on the cross-machine system
 > (`docs/cellular-gaits/CROSS_MACHINE.md`, `cockpit.sh`, Tailscale, `SYNC.md`).
-> Maintainer: Vishal. Status: **P0 shipped** — monitoring loop live end-to-end (Supabase schema +
-> `ingest` + Node reporter + realtime dashboard deployed to Vercel, linked from the site). Only
-> remaining P0 polish: run the reporter as a persistent service on each machine so cards stay live.
+> Maintainer: Vishal. Status: **P0–P2 shipped & live** — monitoring, logs/metrics, and an authed
+> cross-machine control plane are built, merged, and deployed. The `dashboard → command queue →
+> token-authed agent → cockpit.sh → result` round-trip is proven (`check` reached sentry). Next:
+> operationalize (always-on services), then /rc depth join, then a launch verb, then polish —
+> see `docs/ROADMAP.md`.
 
 ## Why
 - A true remote interface to the fleet: kick off / watch heavy runs from the phone, not just the Mac.
@@ -124,3 +126,16 @@ portfolio project), **C off-the-shelf** (CloudCLI/claudecodeui — fast but not 
   portfolio `main` and live on `vishal.pa.thak.io`. Both machines registered
   (`mac-cockpit`, `sentry`). Repos: `github.com/vishal-h-pathak/fleet-mission-control`. Remaining P0
   polish: reporter-as-service on each machine; optional `fleet.vishal.pa.thak.io` domain.
+- **2026-06-21 (P1 shipped)** — Logs & metrics. Added `fleet_job_metrics` (public per-gen fitness
+  series) + `ingest` v3 accepts metric points. Reporter parses per-generation `best=`/`mean=`
+  (CMA-ES dialect, widened after gauging sentry's `nav` log) and gained `--import-log` backfill;
+  sentry's 70-gen `nav` run imported as the first live sparkline. Dashboard adds a public fitness
+  sparkline + an authed log view. Deployed.
+- **2026-06-21 (P2 shipped)** — Authed control plane. `fleet_commands` queue (deny-all RLS) + a
+  token-authed `commands` Edge Function (agents claim/report with their machine token, NO
+  service-role key on the machine). Per-machine control agent (`agent/`) maps an allowlist
+  (`check/status/fetch-log/pull/artifact`) → `cockpit.sh` via `spawnSync` `shell:false` + strict
+  charset validation; dashboard gains an authed dispatch panel. Round-trip proven: queued `check`
+  → Mac agent → `cockpit.sh check` → SSH to sentry → `reachable` result written back. Allowlist
+  drift-guarded by `scripts/check-allowlist-parity.mjs` (caught + fixed a real agent↔dashboard
+  divergence). Forward plan: `docs/ROADMAP.md` (operationalize → /rc join → launch verb → polish).
