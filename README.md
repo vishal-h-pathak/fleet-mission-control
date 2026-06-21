@@ -86,6 +86,9 @@ node index.mjs --dry-run
 
 # Single heartbeat against live ingest
 node index.mjs --once
+
+# Backfill a finished run's full fitness curve (parses the whole log, then exits)
+node index.mjs --import-log <name>   # e.g. --import-log evo
 ```
 
 ### 4. Run as a service
@@ -122,6 +125,7 @@ journalctl -u fleet-reporter -f
 | Jobs | `tmux ls` | Each session = one job |
 | Log tail | `$LOG_DIR/<name>.log` | Last 20 lines (PRIVATE — `fleet_job_links`) |
 | Progress | Regex on log tail | `gens_done`, `gens_total`, `best_fitness` |
+| Metrics | Regex on full log | Per-generation `{gen, best_fitness, mean_fitness?}` → `fleet_job_metrics` (PUBLIC). Only new gens per heartbeat (≤200), tracked by a `$LOG_DIR/<name>.cursor` |
 | RC URL | `$LOG_DIR/<name>.rc` | First line (PRIVATE — `fleet_job_links`) |
 
 ### Job classification
@@ -139,10 +143,43 @@ When a previously-seen tmux session disappears, the reporter sends one final
 heartbeat with `status: "finished"` (or `"failed"` if the log tail contains
 error/traceback/panic/fatal). Simple and intentionally conservative.
 
-### Progress regex coverage (stub notes)
+### Per-generation metrics (fitness sparkline)
+
+Each heartbeat can carry a `metrics` array of per-generation points, which `ingest`
+stores idempotently in `public.fleet_job_metrics` keyed on `(job_id, gen)`:
+
+```json
+"metrics": [ { "gen": 42, "best_fitness": 0.81, "mean_fitness": 0.55 } ]
+```
+
+- **Parsed from the full log**, one point per generation line that also reports a
+  fitness value. Lines naming a generation without a fitness number (e.g.
+  "500 generations planned") are ignored.
+- **Only new generations are sent.** The highest `gen` already sent per job is tracked
+  in memory and persisted to `$LOG_DIR/<name>.cursor`, so a reporter restart doesn't
+  resend. Each heartbeat sends at most 200 points; the rest flush on later heartbeats.
+- **Idempotent.** Re-sending a generation is a no-op (upsert on `(job_id, gen)`), so
+  duplicate/overlapping heartbeats never double-count.
+
+### Backfill: `--import-log <name>`
+
+Parses the **entire** `$LOG_DIR/<name>.log`, emits every generation's metric point
+(chunked at 200/heartbeat), and exits. This is how a finished run that pre-dates the
+reporter gets its full curve into the dashboard. The job is upserted by `(machine, name)`;
+all chunks are sent as `running` and only the final chunk marks the run `finished`
+(or `failed` if the log tail looks like a crash), so the whole curve attaches to one
+closed job row.
+
+### Regex coverage (stub notes)
 
 Currently matches:
 - `gen 150/500` or `generation 150/500` → `gens_done`, `gens_total`
 - `best_fitness: 0.85` / `best fit: 0.85` / `best_fit=0.85` → `best_fitness`
+- `mean_fitness: 0.55` / `mean fit: 0.55` / `mean_fit=0.55` → `mean_fitness`
 
-Not yet covered: ETA extraction, per-generation timing, W&B run URLs.
+Real vs. stubbed:
+- `mean_fitness` is **best-effort**: only captured when it appears on the *same line* as
+  the generation marker. Runs that log mean fitness on a separate line yield points with
+  `best_fitness` only. Widen the `mean[_ ]?fit…` pattern if your logger differs.
+- Not yet covered: ETA extraction, per-generation timing, W&B run URLs, multi-line
+  metric records.
