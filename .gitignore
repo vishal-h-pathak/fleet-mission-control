@@ -13,6 +13,8 @@ dist/
 build/
 *.log
 npm-debug.log*
+*.tsbuildinfo
+next-env.d.ts
 
 # Supabase local
 supabase/.branches/
