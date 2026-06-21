@@ -6,25 +6,18 @@
   <key>Label</key>
   <string>com.fleet.reporter</string>
 
+  <!-- Absolute node path (homebrew). Verify with `command -v node`. -->
+  <!-- All config/secrets come from the gitignored .env via --env-file; none are stored here. -->
   <key>ProgramArguments</key>
   <array>
-    <!-- Adjust path to your node binary if needed -->
-    <string>/usr/local/bin/node</string>
-    <string>/Users/jarvis/dev/jarvis/fleet-mission-control/index.mjs</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file=.env</string>
+    <string>index.mjs</string>
   </array>
 
-  <key>EnvironmentVariables</key>
-  <dict>
-    <!-- Load from a dotenv file instead, or set here (secrets!) -->
-    <key>FLEET_TOKEN</key>
-    <string>REPLACE_ME</string>
-    <key>FLEET_INGEST_URL</key>
-    <string>https://sbmsxerwgylpfkkkjtku.supabase.co/functions/v1/ingest</string>
-    <key>FLEET_HEARTBEAT_INTERVAL_S</key>
-    <string>10</string>
-    <key>FLEET_COCKPIT_LOG_DIR</key>
-    <string>/Users/jarvis/cockpit-logs</string>
-  </dict>
+  <!-- --env-file=.env and index.mjs resolve relative to this dir. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/jarvis/dev/jarvis/fleet-mission-control</string>
 
   <key>RunAtLoad</key>
   <true/>

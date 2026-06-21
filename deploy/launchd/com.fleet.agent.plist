@@ -6,29 +6,19 @@
   <key>Label</key>
   <string>com.fleet.agent</string>
 
+  <!-- Absolute node path (homebrew). Verify with `command -v node`. -->
+  <!-- Config/secrets (FLEET_TOKEN, COCKPIT_SH, WIN_HOST, ...) come from the gitignored .env
+       via --env-file; none are stored in this tracked file. -->
   <key>ProgramArguments</key>
   <array>
-    <!-- Adjust path to your node binary if needed -->
-    <string>/usr/local/bin/node</string>
-    <string>/Users/jarvis/dev/jarvis/fleet-mission-control/agent/index.mjs</string>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file=.env</string>
+    <string>agent/index.mjs</string>
   </array>
 
-  <key>EnvironmentVariables</key>
-  <dict>
-    <!-- Load from a dotenv file instead, or set here (FLEET_TOKEN is a secret!) -->
-    <key>FLEET_TOKEN</key>
-    <string>REPLACE_ME</string>
-    <key>FLEET_COMMANDS_URL</key>
-    <string>https://sbmsxerwgylpfkkkjtku.supabase.co/functions/v1/commands</string>
-    <key>FLEET_POLL_INTERVAL_S</key>
-    <string>4</string>
-    <!-- The Mac agent owns data-pull verbs (pull / fetch-log / artifact); it drives sentry. -->
-    <key>COCKPIT_SH</key>
-    <string>/Users/jarvis/dev/jarvis/portfolio/cockpit.sh</string>
-    <!-- cockpit.sh needs WIN_HOST to reach the box over Tailscale/SSH. -->
-    <key>WIN_HOST</key>
-    <string>REPLACE_ME_user@box-tailscale-name</string>
-  </dict>
+  <!-- --env-file=.env and agent/index.mjs resolve relative to this dir. -->
+  <key>WorkingDirectory</key>
+  <string>/Users/jarvis/dev/jarvis/fleet-mission-control</string>
 
   <key>RunAtLoad</key>
   <true/>
