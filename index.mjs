@@ -270,8 +270,8 @@ function parseProgress(text) {
     progress.gens_total = Number(genMatch[2]);
   }
 
-  // best_fitness: 0.85 or best fit: 0.85 or best_fit=0.85
-  const fitMatch = text.match(/best[_ ]?fit\w*[:= ]+(-?[\d.]+)/i);
+  // best_fitness: 0.85 | best fit: 0.85 | best_fit=0.85 | bare best=6.49 (CMA-ES logs)
+  const fitMatch = text.match(/\bbest(?:[_ ]?fit\w*)?\s*[:=]\s*(-?[\d.]+)/i);
   if (fitMatch) {
     progress.best_fitness = Number(fitMatch[1]);
   }
@@ -292,8 +292,8 @@ function parseMetrics(text) {
     if (!genMatch) continue;
     const gen = Number(genMatch[1]);
 
-    const bestMatch = line.match(/best[_ ]?fit\w*[:= ]+(-?[\d.]+)/i);
-    const meanMatch = line.match(/mean[_ ]?fit\w*[:= ]+(-?[\d.]+)/i);
+    const bestMatch = line.match(/\bbest(?:[_ ]?fit\w*)?\s*[:=]\s*(-?[\d.]+)/i);
+    const meanMatch = line.match(/\bmean(?:[_ ]?fit\w*)?\s*[:=]\s*(-?[\d.]+)/i);
     if (!bestMatch && !meanMatch) continue; // a gen line with no fitness isn't a point
 
     const pt = { gen };
