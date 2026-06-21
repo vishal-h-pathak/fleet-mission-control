@@ -44,12 +44,13 @@ add_worktree () {
 
 open_session () {
   local dir="$1" directive="$2"
+  # `do script` with no target opens a NEW Terminal window and runs the command —
+  # robust whether or not a Terminal window is already open (avoids the -1708
+  # "doesn't understand do script" error from `in front window` with no front window).
   osascript <<OSA
 tell application "Terminal"
   activate
-  tell application "System Events" to keystroke "t" using command down
-  delay 0.5
-  do script "cd '$dir' && claude --permission-mode bypassPermissions" in front window
+  do script "cd '$dir' && claude --permission-mode bypassPermissions"
 end tell
 OSA
   sleep 4
