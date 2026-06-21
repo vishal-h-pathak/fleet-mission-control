@@ -72,3 +72,18 @@ export interface JobLinks {
   rc_url: string | null;
   rc_qr: string | null;
 }
+
+/** One row of the public `fleet_job_metrics` table (fitness time-series; non-sensitive). */
+export interface JobMetric {
+  job_id: string;
+  ts: string;
+  gen: number | null;
+  best_fitness: number | null;
+  mean_fitness: number | null;
+}
+
+/** Log lines returned ONLY by the authed server route. log_tail is SENSITIVE; never public. */
+export interface JobLog {
+  job_id: string;
+  log_tail: string | null;
+}

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { getBrowserClient } from "@/lib/supabase/client";
-import type { Job, MachineStatus } from "@/lib/types";
+import type { Job, JobMetric, MachineStatus } from "@/lib/types";
 import { deriveStatus } from "@/lib/format";
 import MachineCard from "./MachineCard";
 import LiveIndicator, { type ConnState } from "./LiveIndicator";
@@ -18,6 +18,32 @@ function isDisplayable(job: Job): boolean {
   return Date.now() - new Date(ended).getTime() < RECENTLY_ENDED_MS;
 }
 
+// Group flat metric rows into a per-job map, ordered by gen (Sparkline re-sorts
+// defensively too). Returns a fresh Map so React sees a new reference.
+function indexMetrics(rows: JobMetric[]): Map<string, JobMetric[]> {
+  const map = new Map<string, JobMetric[]>();
+  for (const r of rows) {
+    const list = map.get(r.job_id) ?? [];
+    list.push(r);
+    map.set(r.job_id, list);
+  }
+  return map;
+}
+
+// Merge one realtime-inserted point into the map, de-duped on gen so an upsert
+// re-emitting a generation replaces rather than doubles it. Live-growth path.
+function mergeMetric(
+  prev: Map<string, JobMetric[]>,
+  row: JobMetric,
+): Map<string, JobMetric[]> {
+  const next = new Map(prev);
+  const list = next.get(row.job_id) ?? [];
+  const filtered =
+    row.gen == null ? list : list.filter((m) => m.gen !== row.gen);
+  next.set(row.job_id, [...filtered, row]);
+  return next;
+}
+
 export default function Dashboard({
   initialMachines,
   initialJobs,
@@ -29,10 +55,32 @@ export default function Dashboard({
 }) {
   const [machines, setMachines] = useState<MachineStatus[]>(initialMachines);
   const [jobs, setJobs] = useState<Job[]>(initialJobs);
+  const [metricsByJob, setMetricsByJob] = useState<Map<string, JobMetric[]>>(
+    () => new Map(),
+  );
   const [conn, setConn] = useState<ConnState>("connecting");
   const [, setTick] = useState(0);
 
   const debounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fetch the fitness time-series for the jobs currently on screen. Public
+  // table, anon key. Scoped to displayable jobs so we never pull the full
+  // history for long-gone runs.
+  const refetchMetrics = useCallback(async (current: Job[]) => {
+    const ids = current.filter(isDisplayable).map((j) => j.id);
+    if (ids.length === 0) {
+      setMetricsByJob(new Map());
+      return;
+    }
+    const supabase = getBrowserClient();
+    const { data } = await supabase
+      .from("fleet_job_metrics")
+      .select("job_id, ts, gen, best_fitness, mean_fitness")
+      .in("job_id", ids)
+      .order("gen", { ascending: true })
+      .limit(5000);
+    if (data) setMetricsByJob(indexMetrics(data as JobMetric[]));
+  }, []);
 
   const refetch = useCallback(async () => {
     const supabase = getBrowserClient();
@@ -45,8 +93,12 @@ export default function Dashboard({
         .limit(200),
     ]);
     if (m.data) setMachines(m.data as MachineStatus[]);
-    if (j.data) setJobs(j.data as Job[]);
-  }, []);
+    if (j.data) {
+      const next = j.data as Job[];
+      setJobs(next);
+      void refetchMetrics(next);
+    }
+  }, [refetchMetrics]);
 
   const scheduleRefetch = useCallback(() => {
     if (debounce.current) clearTimeout(debounce.current);
@@ -57,6 +109,9 @@ export default function Dashboard({
     const supabase = getBrowserClient();
     let channel: RealtimeChannel | null = null;
 
+    // Initial pull for the jobs rendered on first paint.
+    void refetchMetrics(initialJobs);
+
     const tables = ["fleet_heartbeats", "fleet_jobs", "fleet_machines"];
     channel = supabase.channel("fleet-realtime");
     for (const table of tables) {
@@ -66,6 +121,15 @@ export default function Dashboard({
         () => scheduleRefetch(),
       );
     }
+    // Metrics get their own handler: append each inserted point straight into
+    // state so a running job's sparkline grows live, without a full refetch.
+    channel.on(
+      "postgres_changes",
+      { event: "INSERT", schema: "public", table: "fleet_job_metrics" },
+      (payload) => {
+        setMetricsByJob((prev) => mergeMetric(prev, payload.new as JobMetric));
+      },
+    );
     channel.subscribe((status) => {
       if (status === "SUBSCRIBED") setConn("live");
       else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT")
@@ -84,7 +148,7 @@ export default function Dashboard({
       clearInterval(refetchId);
       if (debounce.current) clearTimeout(debounce.current);
     };
-  }, [refetch, scheduleRefetch]);
+  }, [refetch, scheduleRefetch, refetchMetrics, initialJobs]);
 
   const jobsByMachine = useMemo(() => {
     const map = new Map<string, Job[]>();
@@ -160,6 +224,7 @@ export default function Dashboard({
               machine={m}
               jobs={jobsByMachine.get(m.id) ?? []}
               authed={initialAuthed}
+              metricsByJob={metricsByJob}
             />
           ))}
         </div>

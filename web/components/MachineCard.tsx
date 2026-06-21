@@ -1,6 +1,6 @@
 "use client";
 
-import type { Job, MachineStatus } from "@/lib/types";
+import type { Job, JobMetric, MachineStatus } from "@/lib/types";
 import {
   deriveStatus,
   formatGb,
@@ -29,10 +29,12 @@ export default function MachineCard({
   machine,
   jobs,
   authed,
+  metricsByJob,
 }: {
   machine: MachineStatus;
   jobs: Job[];
   authed: boolean;
+  metricsByJob: Map<string, JobMetric[]>;
 }) {
   // Recompute status client-side from the last heartbeat so it decays live
   // (online → stale → offline) without waiting for a new row.
@@ -104,7 +106,12 @@ export default function MachineCard({
         ) : (
           <ul className="space-y-2">
             {jobs.map((job) => (
-              <JobItem key={job.id} job={job} authed={authed} />
+              <JobItem
+                key={job.id}
+                job={job}
+                authed={authed}
+                metrics={metricsByJob.get(job.id) ?? []}
+              />
             ))}
           </ul>
         )}
