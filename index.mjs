@@ -1,15 +1,18 @@
 #!/usr/bin/env node
 // Fleet Mission Control — Reporter agent (P0 + P1)
 // Standalone Node heartbeat daemon. Zero npm deps.
-// Usage: node index.mjs [--dry-run] [--once] [--import-log <name>]
+// Usage: node index.mjs [--dry-run] [--once] [--import-log <name>] [--set-rc <name> <url>]
 //   --import-log <name>  Parse the ENTIRE $LOG_DIR/<name>.log, emit every generation's
 //                        metric point (chunked) for that job, mark it finished, then exit.
 //                        Backfills a finished run's full fitness curve into fleet_job_metrics.
+//   --set-rc <name> <url>  Write <url> to $LOG_DIR/<name>.rc (the /rc sidecar) so a
+//                        launched session can self-register its remote-control URL, then exit.
 
 import os from "node:os";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { extractRcUrl, validateRcUrl } from "./rc.mjs";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const FLEET_TOKEN = env("FLEET_TOKEN");
@@ -25,11 +28,19 @@ const METRICS_CAP = 200;
 const DRY_RUN = process.argv.includes("--dry-run");
 const ONCE = process.argv.includes("--once");
 const IMPORT_LOG = argValue("--import-log");
+const SET_RC = process.argv.includes("--set-rc");
 
 // Highest generation already sent per job (in-memory; seeded from $LOG_DIR/<name>.cursor).
 const sentCursor = new Map();
 
 // ── Startup ─────────────────────────────────────────────────────────────────
+// --set-rc <name> <url>: write <url> to $LOG_DIR/<name>.rc so a launched session
+// (Phase C) can self-register its /rc URL. Local file write only — no network,
+// no token, no shell. Validates <url> is an https Claude host first.
+if (SET_RC) {
+  runSetRc();
+}
+
 if (!DRY_RUN && !FLEET_TOKEN) {
   console.error("FATAL: FLEET_TOKEN is required (unless --dry-run).");
   process.exit(1);
@@ -198,10 +209,14 @@ function collectJobs() {
         job.progress = parseProgress(tail);
         const pts = newMetricsFor(name, buf); // only generations past the cursor, capped
         if (pts.length) job.metrics = pts; // PUBLIC — ingest routes to fleet_job_metrics
+        // Auto-detect a /remote-control URL from the log (PRIVATE). The .rc
+        // sidecar below, if present, overrides this scraped value.
+        const scraped = extractRcUrl(buf);
+        if (scraped) job.rc_url = scraped;
       } catch { /* log read failed, continue */ }
     }
 
-    // Read rc_url sidecar
+    // Read rc_url sidecar — explicit override; wins over a log-scraped URL.
     const rcPath = path.join(LOG_DIR, `${name}.rc`);
     if (fs.existsSync(rcPath)) {
       try {
@@ -343,6 +358,36 @@ function persistCursors(payload) {
       setCursor(j.name, maxGen);
     }
   }
+}
+
+// ── One-shot: --set-rc <name> <url> ──────────────────────────────────────────
+// Writes <url> as the single line of $LOG_DIR/<name>.rc (overwrites — never
+// duplicates). Exits 0 on success, 1 on bad args. No network, no token, no shell.
+function runSetRc() {
+  const i = process.argv.indexOf("--set-rc");
+  const name = process.argv[i + 1];
+  const url = process.argv[i + 2];
+
+  // Safe single-segment session name (prevents writing outside $LOG_DIR).
+  if (!name || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) {
+    console.error("FATAL: --set-rc <name> <url> — <name> must be 1-64 chars of [A-Za-z0-9._-]");
+    process.exit(1);
+  }
+  if (!validateRcUrl(url)) {
+    console.error("FATAL: --set-rc <name> <url> — <url> must be an https URL on claude.ai / claude.com / app.claude.com");
+    process.exit(1);
+  }
+
+  const rcPath = path.join(LOG_DIR, `${name}.rc`);
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    fs.writeFileSync(rcPath, `${url.trim()}\n`);
+  } catch (err) {
+    console.error(`FATAL: could not write ${rcPath}: ${err.message}`);
+    process.exit(1);
+  }
+  log(`set-rc: wrote ${rcPath} (picked up next heartbeat)`);
+  process.exit(0);
 }
 
 // ── One-shot backfill: --import-log <name> ───────────────────────────────────
