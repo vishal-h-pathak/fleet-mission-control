@@ -1,42 +1,54 @@
-// Canonical verb allowlist for fleet command dispatch — the SINGLE source of
-// truth shared by BOTH the dashboard dispatch route (web) and the per-machine
-// control agent (P2-A keeps agent/allowlist.mjs byte-for-byte identical; a
-// parity test asserts equality at consolidation).
+// Canonical verb allowlist for fleet command dispatch (web/dashboard side).
 //
-// Plain ESM (.mjs, zero deps) on purpose: the Node agent imports the exact same
-// file the TypeScript route does, so the UI and the agent can never drift.
+// The validation RULES here are behaviorally IDENTICAL to agent/allowlist.mjs — the parity
+// test scripts/check-allowlist-parity.mjs asserts the two agree on every accept/reject and
+// fails the build/consolidation if they drift. The two files keep DIFFERENT return shapes by
+// design (the agent returns the cockpit.sh argv it will execute; this returns the normalized
+// {verb,args} the dispatch route inserts). The thing that must never drift is the SET OF
+// ACCEPTED INPUTS — that's what the parity test guards.
 //
 // SECURITY — non-negotiable:
-//   * Only verbs in VERBS are accepted; anything else is "rejected".
-//   * Args are whitelisted by name AND validated against a strict charset
-//     (no shell metacharacters, no path traversal, no absolute paths).
-//   * NEVER add a free-text / arbitrary-exec verb here. The agent maps each
-//     verb to a fixed cockpit.sh primitive with escaped args.
-//
-// Keep this file in sync byte-for-byte with agent/allowlist.mjs.
+//   * Only verbs in VERBS are accepted; anything else is rejected.
+//   * Args are whitelisted by strict charset; no shell metacharacters, no path traversal,
+//     no absolute paths, no '~' expansion. NEVER add a free-text / arbitrary-exec verb.
+//   * If you change a charset/length/path rule here, change agent/allowlist.mjs identically.
 
-/** Strict charsets. No shell metacharacters. */
-const NAME_RE = /^[A-Za-z0-9._-]{1,128}$/;
-const RELPATH_RE = /^[A-Za-z0-9._/-]{1,256}$/;
+// ── Arg charsets (whitelist only) — IDENTICAL to agent/allowlist.mjs ──────────
+// tmux session / job name: letters, digits, dot, underscore, hyphen. 1–64 chars.
+const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+// A single path segment.
+const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
+const PATH_MAX = 256;
 
-// Verb → spec. `args` lists the allowed arg names; any other key is rejected.
+// Validate a relative path: no absolutes, no '~', no traversal, no shell metacharacters,
+// every segment a safe token. Same logic as agent/allowlist.mjs::isSafeRelPath.
+function isSafeRelPath(p) {
+  if (typeof p !== "string" || p.length === 0 || p.length > PATH_MAX) return false;
+  if (p.startsWith("/")) return false; // must be relative
+  if (p.startsWith("~")) return false; // no home expansion
+  const segments = p.split("/");
+  for (const seg of segments) {
+    if (seg === "") return false;                 // no "//", no trailing slash
+    if (seg === "." || seg === "..") return false; // no traversal
+    if (!PATH_SEGMENT_RE.test(seg)) return false;  // strict charset per segment
+  }
+  return true;
+}
+
+// Verb → arg spec. `args` lists allowed arg names; any other key is rejected.
+// `kind` selects the validator: "name" (NAME_RE) or "relpath" (isSafeRelPath).
 // Each verb maps (in the agent) to a fixed cockpit.sh primitive:
-//   check     → cockpit.sh check
-//   status    → cockpit.sh status
-//   fetch-log → cockpit.sh fetch / peek <name>
-//   pull      → cockpit.sh pull
-//   artifact  → cockpit.sh artifact <relpath> [dest]
+//   check → check · status → status · fetch-log → peek <name> ·
+//   pull → pull · artifact → artifact <relpath> [dest]
 export const VERBS = {
   check: { args: [] },
   status: { args: [] },
-  "fetch-log": {
-    args: [{ name: "name", required: true, re: NAME_RE }],
-  },
+  "fetch-log": { args: [{ name: "name", required: true, kind: "name" }] },
   pull: { args: [] },
   artifact: {
     args: [
-      { name: "relpath", required: true, re: RELPATH_RE },
-      { name: "dest", required: false, re: RELPATH_RE },
+      { name: "relpath", required: true, kind: "relpath" },
+      { name: "dest", required: false, kind: "relpath" },
     ],
   },
 };
@@ -47,9 +59,16 @@ export function isAllowedVerb(verb) {
   return Object.prototype.hasOwnProperty.call(VERBS, verb);
 }
 
+function validArg(kind, v) {
+  if (typeof v !== "string") return false;
+  if (kind === "name") return NAME_RE.test(v);
+  if (kind === "relpath") return isSafeRelPath(v);
+  return false;
+}
+
 // Validate a dispatch request against the allowlist. Pure; no I/O.
-// On success returns the normalized { verb, args } (only known args, all
-// strings). On failure returns { ok: false, error } with a safe reason.
+// Success → { ok:true, verb, args } (only known args, all strings).
+// Failure → { ok:false, error } with a safe reason.
 export function validateCommand(verb, rawArgs) {
   if (typeof verb !== "string" || !isAllowedVerb(verb)) {
     return { ok: false, error: `verb not allowed: ${String(verb)}` };
@@ -63,9 +82,7 @@ export function validateCommand(verb, rawArgs) {
 
   const allowed = new Set(spec.args.map((a) => a.name));
   for (const key of Object.keys(args)) {
-    if (!allowed.has(key)) {
-      return { ok: false, error: `unexpected arg: ${key}` };
-    }
+    if (!allowed.has(key)) return { ok: false, error: `unexpected arg: ${key}` };
   }
 
   const out = {};
@@ -75,17 +92,8 @@ export function validateCommand(verb, rawArgs) {
       if (a.required) return { ok: false, error: `missing arg: ${a.name}` };
       continue;
     }
-    if (typeof v !== "string") {
-      return { ok: false, error: `arg ${a.name} must be a string` };
-    }
-    if (!a.re.test(v)) {
-      return { ok: false, error: `arg ${a.name} has invalid characters` };
-    }
-    if (v.includes("..")) {
-      return { ok: false, error: `arg ${a.name} must not contain ".."` };
-    }
-    if (v.startsWith("/")) {
-      return { ok: false, error: `arg ${a.name} must be a relative path` };
+    if (!validArg(a.kind, v)) {
+      return { ok: false, error: `arg ${a.name} has invalid value` };
     }
     out[a.name] = v;
   }

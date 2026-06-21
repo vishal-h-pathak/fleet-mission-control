@@ -5,7 +5,7 @@
 export interface ArgSpec {
   name: string;
   required: boolean;
-  re: RegExp;
+  kind: "name" | "relpath";
 }
 
 export interface VerbSpec {

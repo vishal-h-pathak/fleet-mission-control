@@ -40,6 +40,11 @@ execute with the safety rails below. Do not write or modify project code; this i
   confirm none are staged before any commit.
 - If `git push` fails on auth, STOP and tell me (I'll supply a token).
 
+## 2b. Parity guard (if both allowlists exist on main after merge)
+If `agent/allowlist.mjs` and `web/lib/commands/allowlist.mjs` both exist, run
+`node scripts/check-allowlist-parity.mjs`. If it prints `PARITY FAIL`, STOP and report the
+divergences — the control agent and the dashboard must accept/reject the exact same inputs.
+
 ## 3. Report back
 - Resulting `main` SHA + confirmation it's pushed.
 - Which branches merged; anything skipped/left, and why.
