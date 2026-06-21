@@ -1,8 +1,10 @@
 "use client";
 
-import type { Job } from "@/lib/types";
+import type { Job, JobMetric } from "@/lib/types";
 import { formatEta, relativeTime } from "@/lib/format";
 import RemoteControlButton from "./RemoteControlButton";
+import Sparkline from "./Sparkline";
+import LogView from "./LogView";
 
 const STATUS_STYLE: Record<string, string> = {
   running: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
@@ -12,7 +14,15 @@ const STATUS_STYLE: Record<string, string> = {
   unknown: "bg-zinc-500/15 text-zinc-400 border-zinc-400/20",
 };
 
-export default function JobItem({ job, authed }: { job: Job; authed: boolean }) {
+export default function JobItem({
+  job,
+  authed,
+  metrics,
+}: {
+  job: Job;
+  authed: boolean;
+  metrics: JobMetric[];
+}) {
   const p = job.progress ?? {};
   const hasBar =
     typeof p.gens_total === "number" && p.gens_total > 0 &&
@@ -83,8 +93,11 @@ export default function JobItem({ job, authed }: { job: Job; authed: boolean }) 
         </div>
       )}
 
-      <div className="mt-3">
+      {metrics.length > 0 && <Sparkline metrics={metrics} />}
+
+      <div className="mt-3 flex flex-wrap items-start gap-2">
         <RemoteControlButton jobId={job.id} authed={authed} />
+        <LogView jobId={job.id} authed={authed} />
       </div>
     </li>
   );
