@@ -1,0 +1,23 @@
+[Unit]
+Description=Fleet Mission Control — Reporter agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/fleet/reporter/index.mjs
+EnvironmentFile=/opt/fleet/reporter/.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fleet-reporter
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/
+
+[Install]
+WantedBy=multi-user.target
