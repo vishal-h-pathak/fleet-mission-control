@@ -5,8 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/node /opt/fleet/reporter/index.mjs
-EnvironmentFile=/opt/fleet/reporter/.env
+User=jarvis
+WorkingDirectory=/home/jarvis/dev/jarvis/fleet-mission-control
+ExecStart=/home/jarvis/.nvm/versions/node/v24.17.0/bin/node /home/jarvis/dev/jarvis/fleet-mission-control/index.mjs
+EnvironmentFile=/home/jarvis/dev/jarvis/fleet-mission-control/.env
 Restart=always
 RestartSec=5
 StandardOutput=journal
