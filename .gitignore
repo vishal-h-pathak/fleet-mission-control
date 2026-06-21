@@ -3,6 +3,7 @@
 .env.local
 .env*.local
 *.token
+.fleet-secrets.env
 
 # Node / Next.js
 node_modules/

@@ -79,6 +79,8 @@ seed_fleet_wt () {
   mkdir -p "$wt/prompts" "$wt/docs"
   cp "$FLEET"/prompts/*.md "$wt/prompts/" 2>/dev/null || true
   cp "$FLEET"/docs/*.md    "$wt/docs/"    2>/dev/null || true
+  # gitignored local secrets (tokens, anon key) so sessions don't have to ask
+  [ -f "$FLEET/.fleet-secrets.env" ] && cp "$FLEET/.fleet-secrets.env" "$wt/" 2>/dev/null || true
 }
 
 # ── F1 — reporter (fleet worktree) ──

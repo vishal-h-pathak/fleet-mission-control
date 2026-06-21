@@ -40,6 +40,12 @@ TypeScript. Mirror the portfolio's conventions where reasonable.
 `SUPABASE_SERVICE_ROLE_KEY` (server-only), `FLEET_DASH_PASSWORD`, `FLEET_AUTH_SECRET`
 (cookie signing). Add Vercel project config/notes.
 
+A gitignored `./.fleet-secrets.env` (copied into this worktree by the launcher) holds the
+project URL + anon key (non-secret, ready to use). The `SUPABASE_SERVICE_ROLE_KEY`,
+`FLEET_DASH_PASSWORD`, and `FLEET_AUTH_SECRET` are blank there — ask the human for the
+service-role key (Supabase > Project Settings > API) and let them choose the password/secret.
+Put real values only in a gitignored `web/.env.local`, never in `.env.example`.
+
 ## Acceptance (validate, then STOP and report)
 1. `npm run build` is green (no type errors).
 2. With seeded/live rows, machine cards and active jobs render; a new heartbeat/job updates

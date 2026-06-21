@@ -43,6 +43,14 @@ A `{ ok: true }` response means success; log non-200s with the response body.
 `FLEET_TOKEN`, `FLEET_INGEST_URL`, `FLEET_HEARTBEAT_INTERVAL_S`, `FLEET_COCKPIT_LOG_DIR`,
 plus an optional `FLEET_MACHINE_NAME` for logging. Never commit real values.
 
+**Tokens are already provisioned.** A gitignored `./.fleet-secrets.env` (copied into this
+worktree by the launcher) holds the live values:
+- `FLEET_INGEST_URL`, `NEXT_PUBLIC_SUPABASE_URL`, anon key (non-secret).
+- `FLEET_TOKEN_MAC_COCKPIT` and `FLEET_TOKEN_SENTRY` — the per-machine write tokens (SECRET).
+For local testing on the Mac, create a gitignored `reporter/.env` with
+`FLEET_TOKEN=<value of FLEET_TOKEN_MAC_COCKPIT>` and `FLEET_INGEST_URL` from that file; on
+`sentry`, use `FLEET_TOKEN_SENTRY`. Never copy these tokens into committed files or `.env.example`.
+
 ## Ship
 - `--dry-run` flag: collect and pretty-print the payload to stdout, do NOT send.
 - `--once` flag: send a single heartbeat and exit (for testing).
