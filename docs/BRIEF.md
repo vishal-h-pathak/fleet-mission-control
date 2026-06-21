@@ -5,7 +5,9 @@
 > workstation, phone, future nodes) — monitor what's running, see logs/metrics, and dispatch work,
 > from any device including mobile. Builds directly on the cross-machine system
 > (`docs/cellular-gaits/CROSS_MACHINE.md`, `cockpit.sh`, Tailscale, `SYNC.md`).
-> Maintainer: Vishal. Status: **P0 in progress** — Supabase schema + ingest deployed.
+> Maintainer: Vishal. Status: **P0 shipped** — monitoring loop live end-to-end (Supabase schema +
+> `ingest` + Node reporter + realtime dashboard deployed to Vercel, linked from the site). Only
+> remaining P0 polish: run the reporter as a persistent service on each machine so cards stay live.
 
 ## Why
 - A true remote interface to the fleet: kick off / watch heavy runs from the phone, not just the Mac.
@@ -60,22 +62,33 @@ portfolio project), **C off-the-shelf** (CloudCLI/claudecodeui — fast but not 
 - The reporter can also tee the same heartbeat into `SYNC.md`-adjacent JSON so Cowork/Claude reads it.
 
 ## Phasing
-- **P0 — monitoring (read-only):** reporter on Mac + sentry → Supabase; dashboard shows machine
-  cards (online/load) + active jobs + latest fitness. Phone-responsive. No control yet.
+- **P0 — monitoring (read-only): ✅ SHIPPED 2026-06-21.** Schema + `ingest` live; Node reporter
+  validated against live ingest; Next.js dashboard deployed (realtime machine cards online/load +
+  active jobs + latest fitness, phone-responsive) with an authed slice for `/rc` links; reachable
+  via a `FLEET ↗` button on `vishal.pa.thak.io`. *Remaining:* install the reporter as a persistent
+  service on Mac + `sentry` (so far it has only run as `--once` tests), and (optional) the clean
+  `fleet.vishal.pa.thak.io` domain. No control plane yet (by design).
 - **P1 — logs & metrics:** stream recent log lines + a fitness sparkline per job into the dashboard.
 - **P2 — control:** authed command queue; phone can `start-nav` / `run-prompt <x>` / `stop`.
 - **P3 — polish:** notifications (run done), multi-project view, history, GPU/temp telemetry.
 
 ## Open questions
-- Name (Fleet / Mission Control / Cockpit-web / …). New folder exists: `fleet-mission-control`.
-- **Plan dependency:** is Vishal on **Max**? `/rc` is Max-only right now. If not, the depth layer
-  needs an alternative (open-source webui, or our own ws bridge over Tailscale) until Pro ships.
-- Public project page vs authed-only app on the site (or public shell, authed controls).
-- Reporter as a Python service (uv) or a tiny Node/systemd unit per machine? (Python reuses the
-  cellular env; a standalone agent is more general.)
-- Does this supersede or complement W&B for metric charts?
-- First milestone: **P0 monitoring-only recommended** (safe, read-only, proves the bus, ships
-  fast); control plane (P2) lands later behind real auth.
+**Resolved 2026-06-21:**
+- ~~Name~~ → **Fleet Mission Control**.
+- ~~Max plan dependency for `/rc`~~ → **on Max**, so the `/rc` depth layer is available.
+- ~~Public vs authed~~ → **public shell + authed controls** (enforced in the DB via the
+  public/private table split; authed slice gates the `/rc` links).
+- ~~Reporter Python vs Node~~ → **standalone Node agent** (own service per machine, zero npm deps,
+  decoupled from the cellular Python env).
+- ~~First milestone~~ → **P0 monitoring shipped.**
+
+**Still open:**
+- Does this supersede or complement W&B for metric charts? (Revisit in P1.)
+- Clean domain `fleet.vishal.pa.thak.io` (needs a DNS CNAME) — currently the button points at the
+  `fleet-mission-control.vercel.app` URL via `NEXT_PUBLIC_FLEET_URL` in the portfolio project.
+- Reporter `--once` test only so far; needs to run as a launchd/systemd service to keep cards live.
+- Dedicated Supabase project if/when the org moves off the 2-free-project cap (P0 shares the
+  portfolio project today).
 
 ## Changelog
 - **2026-06-21** — Brief created after the two-machine cockpit went live (`cg check` reached
@@ -98,3 +111,16 @@ portfolio project), **C off-the-shelf** (CloudCLI/claudecodeui — fast but not 
   Function** (per-machine bearer-token auth, service-role writes; no anon writes anywhere).
   Schema documented in `docs/SCHEMA.md`. Security advisors: clean (the only fleet notices are the
   intended deny-all on the two private tables). Next: Node reporter + Next.js realtime dashboard.
+- **2026-06-21 (P0 shipped)** — Built P0 via 3 parallel Claude Code sessions (worktree+branch each,
+  staged by `setup-fleet-p0-wave1.sh`), then consolidated. **Reporter** (`index.mjs`, zero-dep
+  Node): host metrics + GPU (`nvidia-smi`) + tmux/cockpit-log job scraping → `ingest`; validated
+  with a real heartbeat landing in `fleet_heartbeats`; launchd + systemd units written. **Dashboard**
+  (`web/`, Next.js 16 / React 19 / Tailwind 4): realtime machine cards + active jobs, phone-responsive
+  (verified at 390px); authed `/api/job/[id]/links` route (password→signed HttpOnly cookie) that
+  surfaces `/rc` URLs only to an authed viewer — verified end-to-end (401 without cookie, `rc_url`
+  with it, public surface leaks nothing). **Deployed** the dashboard to its own Vercel project
+  (`fleet-mission-control`, root dir `web/`) → `fleet-mission-control.vercel.app`. **Portfolio link**:
+  added a `FLEET ↗` nav button + `/fleet` 302 redirect (env `NEXT_PUBLIC_FLEET_URL`); merged to
+  portfolio `main` and live on `vishal.pa.thak.io`. Both machines registered
+  (`mac-cockpit`, `sentry`). Repos: `github.com/vishal-h-pathak/fleet-mission-control`. Remaining P0
+  polish: reporter-as-service on each machine; optional `fleet.vishal.pa.thak.io` domain.

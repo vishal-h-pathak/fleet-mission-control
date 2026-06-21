@@ -1,4 +1,6 @@
-// Fleet Mission Control — ingest Edge Function (P0).
+// Fleet Mission Control — ingest Edge Function (P0 + P1).
+// P1: each job may include a `metrics` array of {gen,best_fitness,mean_fitness,ts,extra}
+// points, stored idempotently in fleet_job_metrics (public) for fitness sparklines.
 // Write-only telemetry sink. Auth = per-machine bearer token (sha256-matched
 // against fleet_machine_secrets). verify_jwt is OFF because reporters present a
 // machine token, not a Supabase JWT; auth is enforced here, in-function.
@@ -134,6 +136,37 @@ Deno.serve(async (req: Request) => {
         log_tail: j.log_tail ?? null,
         updated_at: nowIso,
       });
+    }
+
+    // P1: metric time-series (public). Idempotent on (job_id, gen).
+    if (jobId && Array.isArray(j.metrics) && j.metrics.length) {
+      const withGen = j.metrics
+        .filter((p: any) => p && p.gen !== undefined && p.gen !== null)
+        .map((p: any) => ({
+          job_id: jobId,
+          ts: p.ts ?? nowIso,
+          gen: p.gen,
+          best_fitness: p.best_fitness ?? null,
+          mean_fitness: p.mean_fitness ?? null,
+          extra: p.extra ?? null,
+        }));
+      const noGen = j.metrics
+        .filter((p: any) => p && (p.gen === undefined || p.gen === null))
+        .map((p: any) => ({
+          job_id: jobId,
+          ts: p.ts ?? nowIso,
+          gen: null,
+          best_fitness: p.best_fitness ?? null,
+          mean_fitness: p.mean_fitness ?? null,
+          extra: p.extra ?? null,
+        }));
+      if (withGen.length) {
+        await admin.from("fleet_job_metrics")
+          .upsert(withGen, { onConflict: "job_id,gen" });
+      }
+      if (noGen.length) {
+        await admin.from("fleet_job_metrics").insert(noGen);
+      }
     }
   }
 
