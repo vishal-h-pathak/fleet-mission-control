@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+// Fleet Mission Control — Control agent (P2-A, per machine)
+// Turns allowlisted commands from the bus into real work via cockpit.sh, reports results back.
+// SECURITY-CRITICAL: hard-coded verb allowlist, charset-whitelisted args, spawn shell:false,
+// NEVER arbitrary shell. No service-role key — auth is the per-machine FLEET_TOKEN only.
+// Zero npm deps, Node 18+, ESM. Same style as the reporter (../index.mjs).
+//
+// Usage:
+//   node index.mjs                         # poll loop: claim -> running -> exec -> result
+//   node index.mjs --once                  # one claim cycle, process, exit
+//   node index.mjs --simulate <verb> [json]# run one verb locally (no bus); proves the executor
+//   node index.mjs --dry-run --simulate <verb> [json]
+//                                          # validate + print the cockpit.sh argv it WOULD run
+//                                          # (no exec, no bus). Use to demo allowlist/arg checks.
+
+import os from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { validateCommand, ALLOWED_VERBS } from "./allowlist.mjs";
+
+// ── Config ──────────────────────────────────────────────────────────────────
+const FLEET_TOKEN = env("FLEET_TOKEN");
+const COMMANDS_URL = env("FLEET_COMMANDS_URL", "https://sbmsxerwgylpfkkkjtku.supabase.co/functions/v1/commands");
+const COCKPIT_SH = resolveHome(env("COCKPIT_SH", "~/dev/jarvis/portfolio/cockpit.sh"));
+const POLL_S = Number(env("FLEET_POLL_INTERVAL_S", "4"));
+const MACHINE_NAME = env("FLEET_MACHINE_NAME", os.hostname());
+const EXEC_TIMEOUT_MS = Number(env("FLEET_EXEC_TIMEOUT_S", "600")) * 1000; // cockpit verbs can ssh/rsync
+const RESULT_MAXLEN = Number(env("FLEET_RESULT_MAXLEN", "16000"));        // truncate captured output
+const AGENT_VERSION = "0.1.0";
+
+const DRY_RUN = process.argv.includes("--dry-run");
+const ONCE = process.argv.includes("--once");
+const SIMULATE = argValue("--simulate"); // verb to run locally without the bus
+
+// ── Entry ─────────────────────────────────────────────────────────────────────
+let busy = false; // declared before loop() runs at startup (avoid temporal-dead-zone)
+if (SIMULATE) {
+  runSimulate(SIMULATE, argValue("--simulate", 2)); // optional JSON args = token after the verb
+} else {
+  if (!FLEET_TOKEN) {
+    console.error("FATAL: FLEET_TOKEN is required for the bus loop (or use --simulate for offline tests).");
+    process.exit(1);
+  }
+  log(`agent starting — machine=${MACHINE_NAME} poll=${POLL_S}s verbs=[${ALLOWED_VERBS.join(", ")}] cockpit=${COCKPIT_SH}`);
+  loop();
+  if (!ONCE) setInterval(loop, POLL_S * 1000);
+}
+
+// ── Poll loop: claim → running → exec → result ────────────────────────────────
+// (busy flag declared in the Entry section above; claims are atomic server-side anyway)
+async function loop() {
+  if (busy) return;
+  busy = true;
+  try {
+    const res = await bus({ action: "claim" });
+    if (res.status !== 200) {
+      log(`claim FAILED ${res.status}: ${res.body}`);
+      return;
+    }
+    const claimed = parseClaimed(res.body);
+    if (!claimed.length) return;
+    log(`claimed ${claimed.length} command(s): ${claimed.map((c) => `${c.verb}#${short(c.id)}`).join(", ")}`);
+    for (const cmd of claimed) {
+      await handle(cmd);
+    }
+  } catch (err) {
+    log(`loop error: ${err.message}`);
+  } finally {
+    busy = false;
+    if (ONCE) process.exit(0);
+  }
+}
+
+async function handle(cmd) {
+  const { id, verb, args } = cmd;
+
+  // 1) Validate against the hard-coded allowlist BEFORE doing anything else.
+  const v = validateCommand(verb, args);
+  if (!v.ok) {
+    log(`reject ${verb}#${short(id)}: ${v.reason}`);
+    await report(id, "rejected", v.reason);
+    return; // nothing executed
+  }
+
+  // 2) Mark running.
+  const r = await bus({ action: "running", id });
+  if (r.status !== 200) log(`running mark FAILED ${r.status}: ${r.body}`);
+
+  // 3) Execute the mapped cockpit.sh invocation (argv array, shell:false).
+  log(`run ${verb}#${short(id)} -> cockpit.sh ${v.argv.join(" ")}`);
+  const out = execCockpit(v.argv);
+
+  // 4) Report result.
+  const status = out.exit_code === 0 ? "done" : "error";
+  await report(id, status, out.result, out.exit_code);
+  log(`done ${verb}#${short(id)} status=${status} exit=${out.exit_code}`);
+}
+
+// ── Executor: cockpit.sh via spawnSync, shell:false, NEVER a shell string ──────
+function execCockpit(argv) {
+  const r = spawnSync(COCKPIT_SH, argv, {
+    encoding: "utf-8",
+    timeout: EXEC_TIMEOUT_MS,
+    maxBuffer: 8 * 1024 * 1024,
+    shell: false, // ← argv is passed verbatim; no shell parsing of args, ever
+  });
+
+  if (r.error) {
+    // spawn failed (e.g. cockpit.sh missing/not executable) or timed out
+    const reason = r.error.code === "ETIMEDOUT" ? `timed out after ${EXEC_TIMEOUT_MS / 1000}s` : r.error.message;
+    return { exit_code: 124, result: { stdout: trunc(r.stdout || ""), stderr: trunc((r.stderr || "") + `\n[spawn error] ${reason}`) } };
+  }
+
+  const exit_code = r.status === null ? 124 : r.status; // null => killed by signal/timeout
+  return {
+    exit_code,
+    result: {
+      stdout: trunc(r.stdout || ""),
+      stderr: trunc(r.stderr || ""),
+      ...(r.signal ? { signal: r.signal } : {}),
+    },
+  };
+}
+
+// ── Bus client (token-authed commands function; NO service-role key) ───────────
+async function bus(body) {
+  return postJSON(COMMANDS_URL, body, FLEET_TOKEN);
+}
+
+async function report(id, status, result, exit_code) {
+  const body = { action: "result", id, status };
+  if (result !== undefined) body.result = result;
+  if (exit_code !== undefined) body.exit_code = exit_code;
+  const res = await bus(body);
+  if (res.status !== 200) log(`result POST FAILED ${res.status}: ${res.body}`);
+  return res;
+}
+
+function parseClaimed(body) {
+  try {
+    const j = JSON.parse(body);
+    return Array.isArray(j.claimed) ? j.claimed : [];
+  } catch {
+    return [];
+  }
+}
+
+// ── --simulate: run/validate one verb locally, no bus ─────────────────────────
+function runSimulate(verb, jsonArgs) {
+  let args = {};
+  if (jsonArgs) {
+    try {
+      args = JSON.parse(jsonArgs);
+    } catch (e) {
+      console.error(`bad --simulate JSON args: ${e.message}`);
+      process.exit(2);
+    }
+  }
+  const v = validateCommand(verb, args);
+  if (!v.ok) {
+    console.log(`REJECTED: ${verb} ${JSON.stringify(args)}\n  reason: ${v.reason}`);
+    process.exit(0); // a rejection is a successful demonstration, not an error
+  }
+  console.log(`ALLOWED: ${verb} ${JSON.stringify(args)}\n  -> spawnSync(${JSON.stringify(COCKPIT_SH)}, ${JSON.stringify(v.argv)}, {shell:false})`);
+  if (DRY_RUN) {
+    console.log("(--dry-run: not executing)");
+    process.exit(0);
+  }
+  const out = execCockpit(v.argv);
+  console.log(`exit_code: ${out.exit_code}`);
+  if (out.result.stdout) console.log(`--- stdout ---\n${out.result.stdout}`);
+  if (out.result.stderr) console.log(`--- stderr ---\n${out.result.stderr}`);
+  process.exit(out.exit_code === 0 ? 0 : 1);
+}
+
+// ── Utilities (mirrors ../index.mjs) ──────────────────────────────────────────
+function trunc(s) {
+  if (s.length <= RESULT_MAXLEN) return s;
+  return s.slice(0, RESULT_MAXLEN) + `\n…[truncated ${s.length - RESULT_MAXLEN} chars]`;
+}
+
+function short(id) {
+  return String(id ?? "").slice(0, 8);
+}
+
+// Value following a flag in argv. nth=1 → first token after flag, nth=2 → second.
+function argValue(flag, nth = 1) {
+  const i = process.argv.indexOf(flag);
+  return i >= 0 && process.argv[i + nth] ? process.argv[i + nth] : null;
+}
+
+function env(key, fallback) {
+  return process.env[key] ?? fallback ?? "";
+}
+
+function resolveHome(p) {
+  if (p.startsWith("~/")) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
+function log(msg) {
+  console.log(`[fleet-agent] ${new Date().toISOString()} ${msg}`);
+}
+
+async function postJSON(url, body, token) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  return { status: res.status, body: text };
+}

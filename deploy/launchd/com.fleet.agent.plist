@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fleet.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- Adjust path to your node binary if needed -->
+    <string>/usr/local/bin/node</string>
+    <string>/Users/jarvis/dev/jarvis/fleet-mission-control/agent/index.mjs</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Load from a dotenv file instead, or set here (FLEET_TOKEN is a secret!) -->
+    <key>FLEET_TOKEN</key>
+    <string>REPLACE_ME</string>
+    <key>FLEET_COMMANDS_URL</key>
+    <string>https://sbmsxerwgylpfkkkjtku.supabase.co/functions/v1/commands</string>
+    <key>FLEET_POLL_INTERVAL_S</key>
+    <string>4</string>
+    <!-- The Mac agent owns data-pull verbs (pull / fetch-log / artifact); it drives sentry. -->
+    <key>COCKPIT_SH</key>
+    <string>/Users/jarvis/dev/jarvis/portfolio/cockpit.sh</string>
+    <!-- cockpit.sh needs WIN_HOST to reach the box over Tailscale/SSH. -->
+    <key>WIN_HOST</key>
+    <string>REPLACE_ME_user@box-tailscale-name</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/fleet-agent.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/fleet-agent.stderr.log</string>
+</dict>
+</plist>

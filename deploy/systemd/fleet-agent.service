@@ -1,0 +1,30 @@
+[Unit]
+Description=Fleet Mission Control — Control agent (allowlisted command queue)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/fleet/agent/agent/index.mjs
+EnvironmentFile=/opt/fleet/agent/.env
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fleet-agent
+
+# Hardening. NOTE: unlike the read-only reporter, the agent EXECUTES cockpit.sh, which
+# writes (git pull, ssh known_hosts, rsync dest, log fetches). So we cannot use the
+# reporter's ProtectSystem=strict / ReadOnlyPaths=/ — those would break the verbs.
+# We keep privilege-escalation off and tighten everything that does not block execution.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+# Confidentiality of the security-critical surface is enforced in code (hard-coded verb
+# allowlist + charset-whitelisted args + spawn shell:false), not by the sandbox.
+
+[Install]
+WantedBy=multi-user.target
