@@ -46,7 +46,8 @@ Partial unique `(machine_id, name) where status='running'` → one active job pe
 
 ### `fleet_job_links` — sensitive job detail (private)
 `job_id` pk→jobs · `rc_url` · `rc_qr` · `cmd` (full directive) · `metrics_url` ·
-`log_tail` · `updated_at`.
+`log_tail` · `last_message` (final assistant message of a finished Code session,
+Phase D) · `updated_at`.
 
 ### `fleet_machine_status` — view (public, `security_invoker`)
 Each machine joined to its latest heartbeat + derived `status`:
@@ -66,13 +67,21 @@ the `ingest` function with `Authorization: Bearer <machine-token>`:
                  "uptime_s": 0, "raw": {} },
   "jobs":      [ { "name": "nav", "project": "cellular-gaits", "kind": "nav",
                    "status": "running", "progress": {"gens_done":0,"gens_total":0,
-                   "best_fitness":0,"eta_s":0}, "rc_url": "...", "cmd": "..." } ]
+                   "best_fitness":0,"eta_s":0}, "rc_url": "...", "cmd": "...",
+                   "last_message": "..." } ]
 }
 ```
 
 `ingest` validates the token (sha256 → `fleet_machine_secrets`), updates `last_seen_at`,
 inserts a heartbeat, and upserts each job (public fields → `fleet_jobs`, sensitive fields
-→ `fleet_job_links`).
+incl. `last_message` → `fleet_job_links`).
+
+A job's terminal record (`status` `finished`/`failed`/`stopped`) is matched idempotently
+per `(machine_id, name)`: the live `running` row is transitioned in place, and a later bare
+reporter `finished` (tmux-disappear crash backstop) updates that **same** row rather than
+inserting a duplicate. Private fields (`rc_url`, `last_message`, …) are written
+**preserve-on-null** — a record that omits a field never nulls an existing value — so the
+rich hook record and the bare reporter backstop converge on one row.
 
 ## Bootstrapping a machine
 
