@@ -89,6 +89,7 @@ export interface JobLog {
 }
 
 export type CommandStatus =
+  | "awaiting_approval"
   | "pending"
   | "claimed"
   | "running"
@@ -107,6 +108,9 @@ export interface FleetCommand {
   args: Record<string, string> | null;
   status: CommandStatus | string;
   requested_by: string | null;
+  // Approval gate: set when an 'awaiting_approval' row is Approved (→ 'pending').
+  approved_by: string | null;
+  approved_at: string | null;
   created_at: string;
   claimed_at: string | null;
   finished_at: string | null;

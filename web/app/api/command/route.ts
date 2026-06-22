@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 import { getServiceClient } from "@/lib/supabase/service";
-import { validateCommand } from "@/lib/commands/allowlist.mjs";
+import { validateCommand, requiresApproval } from "@/lib/commands/allowlist.mjs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +48,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Approval gate: powerful verbs (nav/run) land as 'awaiting_approval' and are
+  // INVISIBLE to the agent (it only claims status='pending') until a second
+  // authed action approves them. Safe verbs go straight to 'pending'.
+  const status = requiresApproval(v.verb) ? "awaiting_approval" : "pending";
+
   const supabase = getServiceClient();
   const { data, error } = await supabase
     .from("fleet_commands")
@@ -55,10 +60,12 @@ export async function POST(req: NextRequest) {
       machine_id,
       verb: v.verb,
       args: v.args,
-      status: "pending",
+      status,
       requested_by: "dashboard",
     })
-    .select("id, machine_id, verb, args, status, requested_by, created_at")
+    .select(
+      "id, machine_id, verb, args, status, requested_by, approved_by, approved_at, created_at",
+    )
     .single();
 
   if (error) {
