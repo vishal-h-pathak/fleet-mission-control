@@ -1,0 +1,31 @@
+{
+  "//": "Fleet completion hook — paste this `hooks` block into ~/.claude/settings.json",
+  "//1": "(user/machine level so EVERY project inherits it). If you already have a",
+  "//2": "`hooks` key, merge these two events into it. Replace the command path with",
+  "//3": "the ABSOLUTE path to deploy/hooks/fleet-notify.sh on THIS machine — the",
+  "//4": "installer prints the resolved path. SessionEnd = completion (push + bus row);",
+  "//5": "Notification (permission/idle only) = a 'needs you' push, no bus row.",
+  "hooks": {
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/fleet-mission-control/deploy/hooks/fleet-notify.sh"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/ABSOLUTE/PATH/TO/fleet-mission-control/deploy/hooks/fleet-notify.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

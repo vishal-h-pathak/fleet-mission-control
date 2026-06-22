@@ -93,6 +93,23 @@ or folder straight off the box to the Mac. That's the **fallback only** — a ha
 clean git path is unavailable. The primary, default channel is `git push`; reach for `cg artifact`
 only when push is broken (and then say so).
 
+## When a session finishes, you hear about it (the completion hook)
+Every machine also has a tiny **Claude Code hook** installed once (at the user level, so it
+covers *every* project automatically — `deploy/hooks/`). The moment any Code session ends —
+a headless `cg run`, an interactive `cg runi`, or a local Mac session — the hook fires and:
+- **pings you** — a desktop banner **and** a phone/desktop push (via the self-hosted ntfy on
+  `sentry`, over Tailscale) — carrying the session's **final message**, which project/branch it
+  was, and the `/rc` link if it had one (tap the push → drop into steering it);
+- **writes a "finished" note onto the whiteboard** (the same Supabase bus), so a Cowork chat can
+  *read* that the run finished and what it said — closing the plan → delegate → execute →
+  **report-back** loop without you babysitting the terminal or copy-pasting.
+
+A second event, **"needs you,"** fires when a session is *waiting* for your input or a permission
+— that one only pings you (no "finished" note). And if a session is hard-killed (so the hook can't
+fire), the reporter's "the tmux session vanished" detection still marks it finished on the
+whiteboard as a backstop — just without the rich message. The hook never blocks or breaks a
+session: if the network or ntfy is down it quietly logs to `~/.fleet/hook.log` and moves on.
+
 ## The safety model in one breath
 Public visitors see machine names and fitness curves (the showcase). Everything sensitive — logs, the
 `/rc` steering links, and the ability to send commands — is behind your password. Machines only push
