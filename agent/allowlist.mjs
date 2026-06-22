@@ -10,7 +10,10 @@
 // Hard rules (do not relax):
 //   - The allowlist is closed: unknown verb => rejected, nothing runs.
 //   - Args are whitelisted by strict charset. NEVER a denylist of "bad chars".
-//   - There is NO `run` / arbitrary-exec verb. Never add one in this cut.
+//   - There is NO arbitrary-exec verb. `run` delegates a natural-language GOAL to Claude on
+//     the box (base64-encoded so it crosses ssh/tmux with zero quoting surface) — never a
+//     shell string. Powerful verbs (`run`, `nav`) carry requiresApproval:true and are gated
+//     by an explicit human approval (enforced server-side AND in the agent — see index.mjs).
 //   - Args are mapped to a cockpit.sh ARGV ARRAY (never a shell string). The caller must
 //     spawn with shell:false. The charset whitelist below is the second line of defense
 //     because cockpit.sh itself interpolates name/relpath into remote ssh commands.
@@ -22,6 +25,23 @@ export const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 export const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 // Max length for a whole relpath/dest, defensive.
 const PATH_MAX = 256;
+
+// ── `run` directive (delegated GOAL, not a shell string) ─────────────────────
+// The fixed set of repos a delegated session may run in. Closed list, never widened here.
+export const RUN_REPOS = ["cellular-gaits", "portfolio"];
+// Max directive length. The directive is base64-encoded before it crosses ssh/tmux, so it
+// needs NO restrictive charset — but we still cap length and reject ANY control char
+// (codepoint < 0x20, incl. \n \r \t \0, and 0x7f DEL) so nothing can smuggle a newline into
+// the remote command or a NUL past the decoder.
+const DIRECTIVE_MAX = 2000;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+// Validate a delegated directive. Returns true only for a clean, length-capped string.
+export function isSafeDirective(s) {
+  if (typeof s !== "string" || s.length === 0 || s.length > DIRECTIVE_MAX) return false;
+  if (CONTROL_CHAR_RE.test(s)) return false; // no newlines / control chars / NULs
+  return true;
+}
 
 // Validate a relative path: no absolutes, no traversal, no shell metacharacters,
 // every segment a safe token. Returns true only for a clean relative path.
@@ -39,11 +59,14 @@ export function isSafeRelPath(p) {
 }
 
 // ── The allowlist ────────────────────────────────────────────────────────────
-// Each entry: validate(args) -> { ok, argv } | { ok:false, reason }
+// Each entry: { requiresApproval, validate(args) -> { ok, argv } | { ok:false, reason } }
 // argv is the exact array passed to cockpit.sh (argv[0] is the verb cockpit.sh expects).
+// requiresApproval:true verbs are MUTATING/powerful — the agent refuses to execute them
+// unless the claimed row carries a non-null approved_at (defense-in-depth; see index.mjs).
 export const VERBS = {
   check: {
     summary: "Is the box reachable?  (cockpit.sh check)",
+    requiresApproval: false,
     validate(args) {
       const e = noArgs(args);
       return e ? rej(e) : ok(["check"]);
@@ -52,6 +75,7 @@ export const VERBS = {
 
   status: {
     summary: "List tmux sessions + last log line.  (cockpit.sh status)",
+    requiresApproval: false,
     validate(args) {
       const e = noArgs(args);
       return e ? rej(e) : ok(["status"]);
@@ -60,6 +84,7 @@ export const VERBS = {
 
   "fetch-log": {
     summary: "Fetch a job log and print its tail.  (cockpit.sh peek <name>)",
+    requiresApproval: false,
     argSpec: { name: "required (job/tmux name)" },
     validate(args) {
       const a = asObject(args);
@@ -75,6 +100,7 @@ export const VERBS = {
 
   pull: {
     summary: "git pull both repos on the Mac.  (cockpit.sh pull)",
+    requiresApproval: false,
     validate(args) {
       const e = noArgs(args);
       return e ? rej(e) : ok(["pull"]);
@@ -83,6 +109,7 @@ export const VERBS = {
 
   artifact: {
     summary: "rsync a file/dir from the box.  (cockpit.sh artifact <relpath> [dest])",
+    requiresApproval: false,
     argSpec: { relpath: "required (relative path under WIN_BASE)", dest: "optional (relative local dest)" },
     validate(args) {
       const a = asObject(args);
@@ -101,7 +128,53 @@ export const VERBS = {
       return ok(["artifact", a.relpath]);
     },
   },
+
+  // ── Phase C action verbs ─────────────────────────────────────────────────
+  morning: {
+    summary: "Resync: fetch sentry logs + git-pull both Mac repos + status.  (cockpit.sh morning)",
+    requiresApproval: false, // read/resync only — the cellular-gaits resume trigger
+    validate(args) {
+      const e = noArgs(args);
+      return e ? rej(e) : ok(["morning"]);
+    },
+  },
+
+  nav: {
+    summary: "Start the paused navigation run.  (cockpit.sh nav)",
+    requiresApproval: true, // mutating: launches a long compute job on the box
+    validate(args) {
+      const e = noArgs(args);
+      return e ? rej(e) : ok(["nav"]);
+    },
+  },
+
+  run: {
+    summary: "Delegate a natural-language GOAL to Claude on the box.  (cockpit.sh run-b64 <repo> <b64>)",
+    requiresApproval: true, // mutating: spawns a bypassPermissions Claude session
+    argSpec: { repo: "required (one of: " + RUN_REPOS.join(", ") + ")", directive: "required (natural-language goal, ≤2000 chars, no control chars)" },
+    validate(args) {
+      const a = asObject(args);
+      if (!a) return rej("args must be an object");
+      const extra = extraKeys(a, ["repo", "directive"]);
+      if (extra) return rej(extra);
+      if (typeof a.repo !== "string" || !RUN_REPOS.includes(a.repo)) {
+        return rej(`invalid 'repo' (must be one of: ${RUN_REPOS.join(", ")})`);
+      }
+      if (!isSafeDirective(a.directive)) {
+        return rej("invalid 'directive' (required string, 1-2000 chars, no control chars / newlines / NULs)");
+      }
+      // Base64-encode the directive so it crosses ssh/tmux with ZERO quoting/injection
+      // surface; cockpit.sh `run-b64` decodes it on the box with `base64 -d` (never eval).
+      const b64 = Buffer.from(a.directive, "utf-8").toString("base64");
+      return ok(["run-b64", a.repo, b64]);
+    },
+  },
 };
+
+// Does this verb require an explicit human approval before the agent will execute it?
+export function verbRequiresApproval(verb) {
+  return isAllowedVerb(verb) && VERBS[verb].requiresApproval === true;
+}
 
 // ── Top-level validation ─────────────────────────────────────────────────────
 // validateCommand(verb, args) -> { ok:true, argv:[...] } | { ok:false, reason:"..." }

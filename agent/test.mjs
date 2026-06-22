@@ -4,7 +4,15 @@
 // Run:  node agent/test.mjs   (exit 0 = all passed)
 
 import assert from "node:assert/strict";
-import { validateCommand, isSafeRelPath, NAME_RE, ALLOWED_VERBS } from "./allowlist.mjs";
+import {
+  validateCommand,
+  isSafeRelPath,
+  isSafeDirective,
+  verbRequiresApproval,
+  NAME_RE,
+  RUN_REPOS,
+  ALLOWED_VERBS,
+} from "./allowlist.mjs";
 
 let passed = 0;
 function ok(name, fn) {
@@ -32,14 +40,29 @@ const reject = (verb, args) => {
 console.log("Fleet control-agent security self-test\n");
 
 // ── Allowlist is exactly the spec ─────────────────────────────────────────────
-ok("allowlist is exactly the 5 spec verbs", () => {
-  assert.deepEqual([...ALLOWED_VERBS].sort(), ["artifact", "check", "fetch-log", "pull", "status"]);
+ok("allowlist is exactly the 8 spec verbs", () => {
+  assert.deepEqual([...ALLOWED_VERBS].sort(), [
+    "artifact", "check", "fetch-log", "morning", "nav", "pull", "run", "status",
+  ]);
+});
+
+// ── requiresApproval flags: read verbs false, mutating verbs true ─────────────
+ok("requiresApproval flags are correct", () => {
+  for (const v of ["check", "status", "fetch-log", "pull", "artifact", "morning"]) {
+    assert.equal(verbRequiresApproval(v), false, `${v} should NOT require approval`);
+  }
+  for (const v of ["nav", "run"]) {
+    assert.equal(verbRequiresApproval(v), true, `${v} SHOULD require approval`);
+  }
+  assert.equal(verbRequiresApproval("nonsense"), false, "unknown verb is not approvable");
 });
 
 // ── Happy path: each verb maps to the exact cockpit.sh argv ────────────────────
 ok("check -> [check]", () => assert.deepEqual(allow("check"), ["check"]));
 ok("status -> [status]", () => assert.deepEqual(allow("status"), ["status"]));
 ok("pull -> [pull]", () => assert.deepEqual(allow("pull"), ["pull"]));
+ok("morning -> [morning]", () => assert.deepEqual(allow("morning"), ["morning"]));
+ok("nav -> [nav]", () => assert.deepEqual(allow("nav"), ["nav"]));
 ok("fetch-log{name:nav} -> [peek, nav]", () => assert.deepEqual(allow("fetch-log", { name: "nav" }), ["peek", "nav"]));
 ok("fetch-log{name:claude-123456} -> [peek, claude-123456]", () =>
   assert.deepEqual(allow("fetch-log", { name: "claude-123456" }), ["peek", "claude-123456"]));
@@ -54,8 +77,8 @@ ok("zero-arg verbs tolerate undefined/null/{}", () => {
 });
 
 // ── Closed allowlist: unknown verbs rejected ──────────────────────────────────
-ok("unknown verb rejected", () => reject("run", { cmd: "rm -rf /" }));
-ok("arbitrary-exec verb 'exec' rejected", () => reject("exec", {}));
+ok("unknown verb rejected", () => reject("exec", { cmd: "rm -rf /" }));
+ok("arbitrary-exec verb 'sh' rejected", () => reject("sh", {}));
 ok("verb casing is exact (Check != check)", () => reject("Check", {}));
 ok("empty / non-string verb rejected", () => {
   reject("", {});
@@ -66,6 +89,8 @@ ok("empty / non-string verb rejected", () => {
 // ── Zero-arg verbs reject any provided args ───────────────────────────────────
 ok("check with args rejected", () => reject("check", { name: "nav" }));
 ok("status with args rejected", () => reject("status", { x: 1 }));
+ok("morning with args rejected", () => reject("morning", { x: 1 }));
+ok("nav with args rejected", () => reject("nav", { repo: "portfolio" }));
 
 // ── fetch-log: name charset whitelist ─────────────────────────────────────────
 ok("fetch-log missing name rejected", () => reject("fetch-log", {}));
@@ -124,6 +149,62 @@ for (const p of HOSTILE_PATHS) {
   ok(`artifact hostile relpath rejected: ${JSON.stringify(p)}`, () => reject("artifact", { relpath: p }));
   ok(`artifact hostile dest rejected: ${JSON.stringify(p)}`, () => reject("artifact", { relpath: "ok/path", dest: p }));
 }
+
+// ── run: repo must be in the fixed set; directive capped + no control chars ────
+ok("run valid -> [run-b64, repo, base64(directive)]", () => {
+  const directive = `tidy the README; add a "Quick start" section & note: 100% done`;
+  const argv = allow("run", { repo: "cellular-gaits", directive });
+  assert.equal(argv[0], "run-b64");
+  assert.equal(argv[1], "cellular-gaits");
+  // argv[2] is base64 that round-trips back to the exact directive (zero-loss over ssh/tmux).
+  assert.equal(Buffer.from(argv[2], "base64").toString("utf-8"), directive);
+});
+ok("run accepts both repos in the fixed set", () => {
+  for (const repo of RUN_REPOS) {
+    assert.deepEqual(allow("run", { repo, directive: "go" })[1], repo);
+  }
+  assert.deepEqual([...RUN_REPOS].sort(), ["cellular-gaits", "portfolio"]);
+});
+ok("run rejects a repo outside the fixed set", () => {
+  reject("run", { repo: "evil", directive: "go" });
+  reject("run", { repo: "../portfolio", directive: "go" });
+  reject("run", { repo: "", directive: "go" });
+  reject("run", { repo: 42, directive: "go" });
+});
+ok("run rejects missing/empty directive", () => {
+  reject("run", { repo: "portfolio" });
+  reject("run", { repo: "portfolio", directive: "" });
+  reject("run", { repo: "portfolio", directive: 123 });
+});
+ok("run rejects an over-long directive (>2000 chars)", () => {
+  reject("run", { repo: "portfolio", directive: "a".repeat(2001) });
+  allow("run", { repo: "portfolio", directive: "a".repeat(2000) }); // exactly at cap = ok
+});
+ok("run rejects control chars / newlines / NULs in directive", () => {
+  reject("run", { repo: "portfolio", directive: "line1\nline2" });
+  reject("run", { repo: "portfolio", directive: "tab\there" });
+  reject("run", { repo: "portfolio", directive: "carriage\rreturn" });
+  reject("run", { repo: "portfolio", directive: "nul\0byte" });
+  reject("run", { repo: "portfolio", directive: "bell\x07" });
+  reject("run", { repo: "portfolio", directive: "del\x7f" });
+});
+ok("run rejects extra arg keys", () => reject("run", { repo: "portfolio", directive: "go", evil: 1 }));
+// The directive needs NO restrictive charset (it's base64'd) — shell metachars are fine as DATA.
+ok("run allows shell metacharacters in the directive (they are base64'd, never a shell string)", () => {
+  const directive = `rm -rf / ; $(reboot) && \`id\` | tee /etc/passwd "quotes" 'apostrophes'`;
+  const argv = allow("run", { repo: "portfolio", directive });
+  assert.equal(Buffer.from(argv[2], "base64").toString("utf-8"), directive);
+});
+
+ok("isSafeDirective behaves", () => {
+  assert.ok(isSafeDirective("plain goal"));
+  assert.ok(isSafeDirective("a".repeat(2000)));
+  assert.ok(!isSafeDirective("a".repeat(2001)));
+  assert.ok(!isSafeDirective(""));
+  assert.ok(!isSafeDirective("has\nnewline"));
+  assert.ok(!isSafeDirective("has\0nul"));
+  assert.ok(!isSafeDirective(123));
+});
 
 // ── Direct unit checks on the validators ──────────────────────────────────────
 ok("NAME_RE accepts good, rejects bad", () => {
