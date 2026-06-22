@@ -53,11 +53,12 @@ Deno.serve(async (req: Request) => {
 
   if (action === "claim") {
     // Atomic: only rows still 'pending' for this machine flip to 'claimed'.
+    // approved_at is returned so the agent can refuse an unapproved mutating verb (defense-in-depth).
     const { data, error } = await admin
       .from("fleet_commands")
       .update({ status: "claimed", claimed_at: nowIso })
       .eq("machine_id", machineId).eq("status", "pending")
-      .select("id, verb, args, created_at");
+      .select("id, verb, args, created_at, approved_at");
     if (error) return json({ error: "claim_failed" }, 500);
     return json({ claimed: data ?? [] });
   }
