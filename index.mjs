@@ -244,6 +244,12 @@ function inferProject(name) {
   return null;
 }
 
+// Crash/kill backstop: a tmux session that disappeared without a hook firing
+// (hard kill) is reported finished here. This is a BACKSTOP only — it must not
+// push to the human (the SessionEnd hook owns the human push → no double-notify;
+// the reporter has no push path) and must not clobber a richer hook record: it
+// deliberately omits `last_message`/`rc_url`, and ingest applies preserve-on-null
+// so the bare record converges on the hook's row without nulling private fields.
 function buildFinishedJob(name) {
   const logPath = path.join(LOG_DIR, `${name}.log`);
   let logTail = "";
