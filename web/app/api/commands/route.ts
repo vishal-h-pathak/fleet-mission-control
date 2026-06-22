@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
   const { data, error } = await supabase
     .from("fleet_commands")
     .select(
-      "id, machine_id, verb, args, status, requested_by, created_at, claimed_at, finished_at, result, exit_code",
+      "id, machine_id, verb, args, status, requested_by, approved_by, approved_at, created_at, claimed_at, finished_at, result, exit_code",
     )
     .eq("machine_id", machineId)
     .order("created_at", { ascending: false })

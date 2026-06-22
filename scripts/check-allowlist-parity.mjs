@@ -13,7 +13,9 @@ import {
 } from "../agent/allowlist.mjs";
 import {
   validateCommand as webValidate,
-  verbRequiresApproval as webRequiresApproval,
+  // The web allowlist (dashboard side) names this export `requiresApproval`; the agent
+  // side names it `verbRequiresApproval`. Same semantics — alias both to a common name.
+  requiresApproval as webRequiresApproval,
   ALLOWED_VERBS as WEB_VERBS,
 } from "../web/lib/commands/allowlist.mjs";
 

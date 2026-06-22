@@ -20,18 +20,27 @@ const NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
 const PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 const PATH_MAX = 256;
 
-// ── `run` directive — IDENTICAL rules to agent/allowlist.mjs ──────────────────
-// Fixed set of repos a delegated session may run in. Closed list.
+// `run` args. The repo is a CLOSED set (never free-text); the directive is a
+// bounded, control-char-free string. Keep these identical to agent/allowlist.mjs.
 export const RUN_REPOS = ["cellular-gaits", "portfolio"];
 const DIRECTIVE_MAX = 2000;
-// Reject ANY control char (codepoint < 0x20, incl. \n \r \t \0, and 0x7f DEL). The directive
-// is base64-encoded agent-side before it crosses ssh/tmux, so no other charset restriction.
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
-function isSafeDirective(s) {
-  if (typeof s !== "string" || s.length === 0 || s.length > DIRECTIVE_MAX) return false;
-  if (CONTROL_CHAR_RE.test(s)) return false;
-  return true;
+// C0 controls (incl. newline/tab) and DEL — disallowed so a directive is a
+// single safe line and can never smuggle terminal/log-injection sequences.
+function hasControlChar(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return true;
+  }
+  return false;
+}
+
+function isValidDirective(s) {
+  return (
+    typeof s === "string" &&
+    s.length >= 1 &&
+    s.length <= DIRECTIVE_MAX &&
+    !hasControlChar(s)
+  );
 }
 
 // Validate a relative path: no absolutes, no '~', no traversal, no shell metacharacters,
@@ -49,19 +58,23 @@ function isSafeRelPath(p) {
   return true;
 }
 
-// Verb → spec. `args` lists allowed arg names; any other key is rejected.
+// Verb → arg spec. `args` lists allowed arg names; any other key is rejected.
 // `kind` selects the validator: "name" (NAME_RE), "relpath" (isSafeRelPath),
-// "repo" (RUN_REPOS membership) or "directive" (isSafeDirective).
-// `requiresApproval` mirrors agent/allowlist.mjs — the dashboard sets status to
-// 'awaiting_approval' (vs 'pending') for these so a human must approve before the box runs them.
+// "repo" (RUN_REPOS membership) or "directive" (bounded, control-char-free).
+// `requiresApproval`: powerful, mutating verbs land as 'awaiting_approval' and
+// need a second authed Approve before the agent (which only claims 'pending')
+// can pick them up. This flag MUST match agent/allowlist.mjs verb-for-verb.
 // Each verb maps (in the agent) to a fixed cockpit.sh primitive:
-//   check → check · status → status · fetch-log → peek <name> · pull → pull ·
-//   artifact → artifact <relpath> [dest] · morning → morning · nav → nav ·
-//   run → run-b64 <repo> <base64-directive>
+//   check → check · status → status · fetch-log → peek <name> ·
+//   pull → pull · artifact → artifact <relpath> [dest] ·
+//   morning → morning · nav → nav · run → run <repo> <directive>
 export const VERBS = {
   check: { requiresApproval: false, args: [] },
   status: { requiresApproval: false, args: [] },
-  "fetch-log": { requiresApproval: false, args: [{ name: "name", required: true, kind: "name" }] },
+  "fetch-log": {
+    requiresApproval: false,
+    args: [{ name: "name", required: true, kind: "name" }],
+  },
   pull: { requiresApproval: false, args: [] },
   artifact: {
     requiresApproval: false,
@@ -75,8 +88,8 @@ export const VERBS = {
   run: {
     requiresApproval: true,
     args: [
-      { name: "repo", required: true, kind: "repo" },
-      { name: "directive", required: true, kind: "directive" },
+      { name: "repo", required: true, kind: "repo", options: RUN_REPOS },
+      { name: "directive", required: true, kind: "directive", maxLen: DIRECTIVE_MAX },
     ],
   },
 };
@@ -87,8 +100,9 @@ export function isAllowedVerb(verb) {
   return Object.prototype.hasOwnProperty.call(VERBS, verb);
 }
 
-// Does this verb require an explicit human approval? Keep in sync with agent/allowlist.mjs.
-export function verbRequiresApproval(verb) {
+// True iff the verb is allowlisted AND flagged as requiring a second authed
+// approval. Closed-by-default: unknown verbs are never "approval-required".
+export function requiresApproval(verb) {
   return isAllowedVerb(verb) && VERBS[verb].requiresApproval === true;
 }
 
@@ -97,7 +111,7 @@ function validArg(kind, v) {
   if (kind === "name") return NAME_RE.test(v);
   if (kind === "relpath") return isSafeRelPath(v);
   if (kind === "repo") return RUN_REPOS.includes(v);
-  if (kind === "directive") return isSafeDirective(v);
+  if (kind === "directive") return isValidDirective(v);
   return false;
 }
 
