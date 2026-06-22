@@ -12,11 +12,15 @@
 //   node index.mjs --dry-run --simulate <verb> [json]
 //                                          # validate + print the cockpit.sh argv it WOULD run
 //                                          # (no exec, no bus). Use to demo allowlist/arg checks.
+//   node index.mjs --simulate <verb> [json] --approved-at <iso>
+//                                          # simulate a CLAIMED row carrying an approval. Without
+//                                          # it, a requiresApproval verb is shown then refused
+//                                          # ("unapproved") and never executed — proves the gate.
 
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { validateCommand, ALLOWED_VERBS } from "./allowlist.mjs";
+import { validateCommand, verbRequiresApproval, ALLOWED_VERBS } from "./allowlist.mjs";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const FLEET_TOKEN = env("FLEET_TOKEN");
@@ -35,7 +39,8 @@ const SIMULATE = argValue("--simulate"); // verb to run locally without the bus
 // ── Entry ─────────────────────────────────────────────────────────────────────
 let busy = false; // declared before loop() runs at startup (avoid temporal-dead-zone)
 if (SIMULATE) {
-  runSimulate(SIMULATE, argValue("--simulate", 2)); // optional JSON args = token after the verb
+  // optional JSON args = token after the verb; --approved-at <iso> models an approved claim
+  runSimulate(SIMULATE, simulateJsonArgs(), argValue("--approved-at"));
 } else {
   if (!FLEET_TOKEN) {
     console.error("FATAL: FLEET_TOKEN is required for the bus loop (or use --simulate for offline tests).");
@@ -79,6 +84,15 @@ async function handle(cmd) {
   if (!v.ok) {
     log(`reject ${verb}#${short(id)}: ${v.reason}`);
     await report(id, "rejected", v.reason);
+    return; // nothing executed
+  }
+
+  // 1b) Approval gate (defense-in-depth). The agent only ever claims 'pending' rows and the
+  // Edge Function holds unapproved mutating commands at 'awaiting_approval' — but even if a
+  // requiresApproval verb somehow reached us without a non-null approved_at, refuse it.
+  if (verbRequiresApproval(verb) && !cmd.approved_at) {
+    log(`reject ${verb}#${short(id)}: unapproved (requiresApproval, approved_at=null)`);
+    await report(id, "rejected", "unapproved");
     return; // nothing executed
   }
 
@@ -146,7 +160,7 @@ function parseClaimed(body) {
 }
 
 // ── --simulate: run/validate one verb locally, no bus ─────────────────────────
-function runSimulate(verb, jsonArgs) {
+function runSimulate(verb, jsonArgs, approvedAt) {
   let args = {};
   if (jsonArgs) {
     try {
@@ -162,6 +176,17 @@ function runSimulate(verb, jsonArgs) {
     process.exit(0); // a rejection is a successful demonstration, not an error
   }
   console.log(`ALLOWED: ${verb} ${JSON.stringify(args)}\n  -> spawnSync(${JSON.stringify(COCKPIT_SH)}, ${JSON.stringify(v.argv)}, {shell:false})`);
+
+  // Approval gate — same check the bus path applies in handle(). Model the claimed row's
+  // approved_at via --approved-at; without it, a requiresApproval verb is refused (not run).
+  if (verbRequiresApproval(verb) && !approvedAt) {
+    console.log(`  requiresApproval: true, approved_at=null -> REJECTED: unapproved (not executed)`);
+    process.exit(0);
+  }
+  if (verbRequiresApproval(verb)) {
+    console.log(`  requiresApproval: true, approved_at=${JSON.stringify(approvedAt)} -> approved, proceeding`);
+  }
+
   if (DRY_RUN) {
     console.log("(--dry-run: not executing)");
     process.exit(0);
@@ -187,6 +212,12 @@ function short(id) {
 function argValue(flag, nth = 1) {
   const i = process.argv.indexOf(flag);
   return i >= 0 && process.argv[i + nth] ? process.argv[i + nth] : null;
+}
+
+// JSON args token for --simulate: the token right after the verb, unless it's a flag.
+function simulateJsonArgs() {
+  const t = argValue("--simulate", 2);
+  return t && !t.startsWith("--") ? t : null;
 }
 
 function env(key, fallback) {
