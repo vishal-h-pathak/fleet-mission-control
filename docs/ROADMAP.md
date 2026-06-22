@@ -45,7 +45,24 @@ the first verb that *starts* something rather than reading/pulling.
 - **Done when:** an authed dispatch starts a run on sentry and its job (+ `/rc` link) appears live.
 
 ## Phase D — Polish
-- Notifications when a run finishes (run-done → push/Slack/email — pick a channel).
+- **Close the loop: run-finished notifications (Cowork ⇄ Code).** ★ Researched + designed
+  2026-06-22 — see **`docs/LOOP_CLOSER.md`** for the full brief. The reusable primitive is
+  **Claude Code hooks** (`Stop`/`SessionEnd`, configured once per machine, work in headless `cg run`
+  jobs): on completion, push to the human (ntfy-over-Tailscale fits the existing infra) **and** write
+  a structured record into the fleet bus carrying the session's final message (+ `/rc` link). Cowork
+  closes its half by **reading the fleet Supabase** (Supabase MCP) — no per-project setup, no manual
+  paste. Builds on the reporter's existing finished-job detection (kept as the crash backstop).
+  Vishal is prioritizing this; implementation happens in a dedicated chat. (Was the one-line
+  "run-done → push/Slack/email" stub; now scoped.)
+- **Interactive delegated dispatch — `cg runi`.** ★ Added 2026-06-22. A cockpit verb to launch
+  *interactive* (not `-p`) `claude` sessions on the box in tmux with `--rc`, so delegated sessions can
+  be **observed, steered, and resumed in-context** — `cg attach` over ssh for keyboard control, `/rc`
+  for browser/phone — and **pause at a prompt's STOP point for an in-session go/no-go** instead of a
+  fresh dispatch that re-reads everything. Lesson that motivated it (2026-06-22): headless `claude -p`
+  can't be attached or resumed and is the wrong tool for STOP-and-confirm jobs; reserve `-p` for truly
+  autonomous, no-confirmation work. Pairs with Phase B (`/rc`) and the loop-closer above. Also folds in
+  the parked `run-v`/`peekv` streaming dispatch and box-session git reliability (commit-before-stop +
+  push-creds). Design detail in `docs/LOOP_CLOSER.md`.
 - Command history view in the dashboard (authed).
 - GPU/temp telemetry surfaced on cards (data already collected by the reporter).
 - Multi-project grouping; history/retention tuning.

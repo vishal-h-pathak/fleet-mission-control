@@ -93,6 +93,18 @@ portfolio project), **C off-the-shelf** (CloudCLI/claudecodeui — fast but not 
   portfolio project today).
 
 ## Changelog
+- **2026-06-22 (loop-closer designed + repo reorg)** — Scoped the **run-finished notification**
+  feature (Cowork ⇄ Code loop) into a full design brief: `docs/LOOP_CLOSER.md`. Research found the
+  reusable primitive is **Claude Code hooks** (`Stop`/`SessionEnd`, once per machine, fire in headless
+  `cg run` jobs); proposed design pushes to the human (ntfy-over-Tailscale) **and** writes a
+  structured completion record into the existing fleet bus (carrying `last_assistant_message` + the
+  `/rc` link), with **Cowork reading the fleet Supabase via MCP** as the no-paste ingestion path —
+  building on the reporter's existing finished-job detection (kept as the crash backstop). Elevated in
+  `ROADMAP.md` Phase D from a one-line stub; **implementation deferred to a dedicated chat.** Also
+  reorganized the repo to the shared `ops/` convention (matching `cellular-gaits` + `portfolio`):
+  prompts → `ops/prompts/` (+ `archive/`), wave launchers → `ops/waves/` (+ `archive/`); root now
+  holds only the running system + `README`/`ONBOARDING`. Active wave scripts (`phaseB`, `phaseC`)
+  repathed to `ops/prompts/`; `ops/README.md` + `HOW_IT_WORKS` updated.
 - **2026-06-21** — Brief created after the two-machine cockpit went live (`cg check` reached
   `sentry`). Captured the push-via-Supabase architecture + phasing. Not started.
 - **2026-06-21 (research)** — Researched Anthropic's `/remote-control` (`/rc`). Reframed to a

@@ -11,18 +11,18 @@
 # flags + run arg schema. Independent files otherwise, so they run in parallel on separate branches.
 # Opens a Terminal window per session, claude running, directive pasted-unsent (review, press Return).
 #
-# Run from the fleet-mission-control repo root on the Mac:  bash setup-fleet-phaseC-wave.sh
+# Run from the fleet-mission-control repo root on the Mac:  bash ops/waves/setup-fleet-phaseC-wave.sh
 
 set -euo pipefail
 
 FLEET="$(pwd)"
 FLEET_WT="$(cd .. && pwd)/fleet-wt"
-CONV="prompts/PROMPT_fleet_conventions.md"
+CONV="ops/prompts/PROMPT_fleet_conventions.md"
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "ERROR: run from the fleet repo root."; exit 1; }
 [ -f "$CONV" ] || { echo "ERROR: $CONV missing."; exit 1; }
-[ -f "prompts/PROMPT_fleet_phaseC_agent.md" ] || { echo "ERROR: C-A prompt missing."; exit 1; }
-[ -f "prompts/PROMPT_fleet_phaseC_dashboard.md" ] || { echo "ERROR: C-B prompt missing."; exit 1; }
+[ -f "ops/prompts/PROMPT_fleet_phaseC_agent.md" ] || { echo "ERROR: C-A prompt missing."; exit 1; }
+[ -f "ops/prompts/PROMPT_fleet_phaseC_dashboard.md" ] || { echo "ERROR: C-B prompt missing."; exit 1; }
 command -v claude >/dev/null 2>&1 || { echo "ERROR: 'claude' CLI not on PATH."; exit 1; }
 
 mkdir -p "$FLEET_WT"
@@ -30,7 +30,7 @@ mkdir -p "$FLEET_WT"
 seed_fleet_wt () {
   local wt="$1"
   mkdir -p "$wt/prompts" "$wt/docs"
-  cp "$FLEET"/prompts/*.md "$wt/prompts/" 2>/dev/null || true
+  cp "$FLEET"/ops/prompts/*.md "$wt/ops/prompts/" 2>/dev/null || true
   cp "$FLEET"/docs/*.md    "$wt/docs/"    2>/dev/null || true
   [ -f "$FLEET/.fleet-secrets.env" ] && cp "$FLEET/.fleet-secrets.env" "$wt/" 2>/dev/null || true
 }
@@ -61,12 +61,12 @@ echo "Staging Fleet Phase C wave (2 parallel sessions)…"
 add_worktree "$FLEET_WT/phaseC-agent" "feat/fleet-phaseC-agent"
 seed_fleet_wt "$FLEET_WT/phaseC-agent"
 open_session "$FLEET_WT/phaseC-agent" \
-  "Read ./prompts/PROMPT_fleet_conventions.md then ./prompts/PROMPT_fleet_phaseC_agent.md and implement it on this branch (feat/fleet-phaseC-agent). Add verbs morning/nav/run with requiresApproval flags, the cockpit.sh run-b64 (--rc) change in ~/dev/jarvis/portfolio, and agent approval enforcement (refuse mutating verb without approved_at). Keep allowlist byte-identical to the dashboard copy. Validate, then STOP and report. Do not begin until I confirm."
+  "Read ./ops/prompts/PROMPT_fleet_conventions.md then ./ops/prompts/PROMPT_fleet_phaseC_agent.md and implement it on this branch (feat/fleet-phaseC-agent). Add verbs morning/nav/run with requiresApproval flags, the cockpit.sh run-b64 (--rc) change in ~/dev/jarvis/portfolio, and agent approval enforcement (refuse mutating verb without approved_at). Keep allowlist byte-identical to the dashboard copy. Validate, then STOP and report. Do not begin until I confirm."
 
 add_worktree "$FLEET_WT/phaseC-dashboard" "feat/fleet-phaseC-dashboard"
 seed_fleet_wt "$FLEET_WT/phaseC-dashboard"
 open_session "$FLEET_WT/phaseC-dashboard" \
-  "Read ./prompts/PROMPT_fleet_conventions.md then ./prompts/PROMPT_fleet_phaseC_dashboard.md and implement it on this branch (feat/fleet-phaseC-dashboard). Add morning/nav/run to the dispatch UI + the approval gate (awaiting_approval → Approve/Reject routes + queue). Keep allowlist byte-identical to the agent copy; parity test green. Validate, then STOP and report. Do not begin until I confirm."
+  "Read ./ops/prompts/PROMPT_fleet_conventions.md then ./ops/prompts/PROMPT_fleet_phaseC_dashboard.md and implement it on this branch (feat/fleet-phaseC-dashboard). Add morning/nav/run to the dispatch UI + the approval gate (awaiting_approval → Approve/Reject routes + queue). Keep allowlist byte-identical to the agent copy; parity test green. Validate, then STOP and report. Do not begin until I confirm."
 
 cat <<DONE
 

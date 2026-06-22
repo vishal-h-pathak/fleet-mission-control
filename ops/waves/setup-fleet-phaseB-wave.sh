@@ -4,17 +4,17 @@
 # One session, one branch (feat/fleet-phaseB-rc) touching index.mjs + web/. Opens a Terminal window
 # with claude running and the directive pasted-unsent (review, press Return).
 #
-# Run from the fleet-mission-control repo root on the Mac:  bash setup-fleet-phaseB-wave.sh
+# Run from the fleet-mission-control repo root on the Mac:  bash ops/waves/setup-fleet-phaseB-wave.sh
 
 set -euo pipefail
 
 FLEET="$(pwd)"
 FLEET_WT="$(cd .. && pwd)/fleet-wt"
-CONV="prompts/PROMPT_fleet_conventions.md"
+CONV="ops/prompts/PROMPT_fleet_conventions.md"
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "ERROR: run from the fleet repo root."; exit 1; }
 [ -f "$CONV" ] || { echo "ERROR: $CONV missing."; exit 1; }
-[ -f "prompts/PROMPT_fleet_phaseB_rc_join.md" ] || { echo "ERROR: Phase B prompt missing."; exit 1; }
+[ -f "ops/prompts/PROMPT_fleet_phaseB_rc_join.md" ] || { echo "ERROR: Phase B prompt missing."; exit 1; }
 command -v claude >/dev/null 2>&1 || { echo "ERROR: 'claude' CLI not on PATH."; exit 1; }
 
 mkdir -p "$FLEET_WT"
@@ -26,7 +26,7 @@ else
   echo "worktree $wt exists — reusing"
 fi
 mkdir -p "$wt/prompts" "$wt/docs"
-cp "$FLEET"/prompts/*.md "$wt/prompts/" 2>/dev/null || true
+cp "$FLEET"/ops/prompts/*.md "$wt/ops/prompts/" 2>/dev/null || true
 cp "$FLEET"/docs/*.md    "$wt/docs/"    2>/dev/null || true
 [ -f "$FLEET/.fleet-secrets.env" ] && cp "$FLEET/.fleet-secrets.env" "$wt/" 2>/dev/null || true
 
@@ -37,7 +37,7 @@ tell application "Terminal"
 end tell
 OSA
 sleep 4
-DIRECTIVE="Read ./prompts/PROMPT_fleet_conventions.md then ./prompts/PROMPT_fleet_phaseB_rc_join.md and implement it on this branch (feat/fleet-phaseB-rc). Reporter: keep zero-dep, add /rc URL log-detection + --set-rc helper. Dashboard: confirm mobile tap-through + add an authed QR (small npm lib ok), public leaks nothing. Validate, then STOP and report the /rc regex you settled on. Do not begin until I confirm."
+DIRECTIVE="Read ./ops/prompts/PROMPT_fleet_conventions.md then ./ops/prompts/PROMPT_fleet_phaseB_rc_join.md and implement it on this branch (feat/fleet-phaseB-rc). Reporter: keep zero-dep, add /rc URL log-detection + --set-rc helper. Dashboard: confirm mobile tap-through + add an authed QR (small npm lib ok), public leaks nothing. Validate, then STOP and report the /rc regex you settled on. Do not begin until I confirm."
 osascript <<OSA
 set the clipboard to "$DIRECTIVE"
 tell application "Terminal" to activate
