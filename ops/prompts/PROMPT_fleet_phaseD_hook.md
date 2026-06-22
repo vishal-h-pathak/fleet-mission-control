@@ -22,7 +22,7 @@ Build our own thin hook script (recommended) — off-the-shelf tools (`claude-no
 A self-hosted ntfy server is live on `sentry` (systemd, on the tailnet) and verified reachable from
 the Mac over Tailscale. Point the hook at it; do **not** install or configure ntfy.
 - **Base URL:** `http://100.86.154.46:8080`
-- **Topic:** `fleet-e7b207fdf04221b8681aff16` — treat as a **secret/capability** (anyone holding it can
+- **Topic:** `fleet-<secret-topic>` — treat as a **secret/capability** (anyone holding it can
   read session output). Keep it in the gitignored machine env only; never commit the real value.
 - Publish shape (what the hook does): `curl -d "<msg>" http://100.86.154.46:8080/<topic>` (add
   `-H "Title: ..."`, `-H "Click: <rc_url>"`, `-H "Tags: ..."` as useful). Verify against the live topic.
@@ -48,7 +48,7 @@ the Mac over Tailscale. Point the hook at it; do **not** install or configure nt
   blindly) that registers the `SessionEnd` + `Notification` hooks **at the machine/user level** so
   every project inherits them. Install once per machine; show the user the snippet to confirm.
 - Config via env (machine-level, gitignored): `NTFY_BASE_URL=http://100.86.154.46:8080`,
-  `NTFY_TOPIC=fleet-e7b207fdf04221b8681aff16` (secret — placeholder only in `.env.example`), the
+  `NTFY_TOPIC=fleet-<secret-topic>` (secret — placeholder only in `.env.example`), the
   reporter `FLEET_TOKEN` (reuse the machine's existing reporter token — do NOT mint a new secret),
   `INGEST_URL`. Update `.env.example` with the key names + placeholders, never the real topic/token.
 

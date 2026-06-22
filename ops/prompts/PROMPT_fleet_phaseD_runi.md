@@ -32,8 +32,13 @@ Specifics:
     it so it finds a `runi` session by name.
   - `/rc` → the URL printed by `--rc` lands in the log → reporter scrapes it (Phase B) → dashboard
     surfaces it → steer from phone/browser, in sync.
-- **`/rc` capture:** confirm the reporter's `.rc` sidecar / log-scrape picks up the `runi` session's
-  URL exactly as it does for `run-b64`. If seeding races the URL print, optionally `--set-rc` it.
+- **`/rc` capture (note the F3 finding):** `run-v`/`run-b64` validation (2026-06-22) showed headless
+  `-p`/print mode **never emits a `/rc` steering URL** into the log — so this interactive `runi` verb
+  should be the **first** dispatch where `/rc` actually works (remote-control bridges a *running
+  interactive* session). Do NOT rely on log-scrape: have the STOP-gate / launch path **write the `.rc`
+  sidecar explicitly via `--set-rc <name> <url>`** once the interactive session prints its URL, so the
+  reporter surfaces it deterministically. Confirm it lands on the job card (Phase B) and steers the
+  same session. If no URL appears even interactively, report that plainly (don't claim `/rc` works).
 
 ## Acceptance (validate, then STOP and report — live box)
 1. `cg runi <repo> "<directive with quotes/spaces/punct>"` launches an interactive (non-`-p`) tmux
