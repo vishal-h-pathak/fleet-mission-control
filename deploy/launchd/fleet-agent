@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# fleet-agent — named launchd entry point so the background item reads "fleet-agent"
+# instead of "node". Thin wrapper: execs the control agent with the same args. Relies on the
+# plist's WorkingDirectory (fleet repo root) so --env-file=.env and agent/index.mjs resolve.
+exec /opt/homebrew/bin/node --env-file=.env agent/index.mjs "$@"

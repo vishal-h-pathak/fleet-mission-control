@@ -8,15 +8,13 @@
 
   <!-- Absolute node path (homebrew). Verify with `command -v node`. -->
   <!-- Config/secrets (FLEET_TOKEN, COCKPIT_SH, WIN_HOST, ...) come from the gitignored .env
-       via --env-file; none are stored in this tracked file. -->
+       file; none are stored in this tracked file. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/node</string>
-    <string>--env-file=.env</string>
-    <string>agent/index.mjs</string>
+    <string>/Users/jarvis/dev/jarvis/fleet-mission-control/deploy/launchd/fleet-agent</string>
   </array>
 
-  <!-- --env-file=.env and agent/index.mjs resolve relative to this dir. -->
+  <!-- The .env file and agent/index.mjs resolve relative to this dir. -->
   <key>WorkingDirectory</key>
   <string>/Users/jarvis/dev/jarvis/fleet-mission-control</string>
 

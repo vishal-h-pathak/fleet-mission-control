@@ -7,15 +7,13 @@
   <string>com.fleet.reporter</string>
 
   <!-- Absolute node path (homebrew). Verify with `command -v node`. -->
-  <!-- All config/secrets come from the gitignored .env via --env-file; none are stored here. -->
+  <!-- All config/secrets come from the gitignored .env file; none are stored here. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/opt/homebrew/bin/node</string>
-    <string>--env-file=.env</string>
-    <string>index.mjs</string>
+    <string>/Users/jarvis/dev/jarvis/fleet-mission-control/deploy/launchd/fleet-reporter</string>
   </array>
 
-  <!-- --env-file=.env and index.mjs resolve relative to this dir. -->
+  <!-- The .env file and index.mjs resolve relative to this dir. -->
   <key>WorkingDirectory</key>
   <string>/Users/jarvis/dev/jarvis/fleet-mission-control</string>
 
