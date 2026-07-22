@@ -280,16 +280,19 @@ bus_post_finished() { # <last_message> <pr_url>
   # pr_url; we do NOT mirror into log_tail (per decision 2026-06-22).
   body="$(jq -nc \
     --arg name "$JOB_NAME" --arg project "$PROJECT" --arg ended "$now" \
-    --arg msg "$msg" --arg rc "$RC_URL" --arg pr "$pr" '
+    --arg msg "$msg" --arg rc "$RC_URL" --arg pr "$pr" --arg branch "$BRANCH" '
     { jobs: [
         ( { name: $name, kind: "claude-session", status: "finished",
             ended_at: $ended, last_message: $msg }
           + (if $project != "" then { project: $project } else {} end)
           + (if $rc != ""      then { rc_url: $rc }       else {} end)
-          + (if $pr != ""      then { pr_url: $pr }       else {} end) )
+          + (if $pr != ""      then { pr_url: $pr }       else {} end)
+          + (if $branch != "" then { branch: $branch } else {} end) )
     ] }' 2>/dev/null)"
   [ -n "$body" ] || { log "bus POST skipped — jq failed to build body"; return 0; }
-  log "bus POST body: $body"
+  # Redacted log: field presence + lengths only — last_message/rc_url/pr_url are
+  # SENSITIVE and must never be persisted verbatim to the (world-readable) hook.log.
+  log "bus POST body: name=$JOB_NAME project=${PROJECT:+set} branch=${BRANCH:+set} last_message_len=${#msg} rc_url=${RC_URL:+set} pr_url=${pr:+set}"
 
   local code
   code="$(curl -sS --max-time "$CURL_MAX_TIME" -o /dev/null -w '%{http_code}' \
