@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { applyDecision } from "@/lib/inbox/decisions";
+import { isValidSessionId } from "@/lib/inbox/session-id";
 
 export const dynamic = "force-dynamic";
 
@@ -8,15 +9,12 @@ export const dynamic = "force-dynamic";
 // Reject -> insert fleet_decisions(action='reject') -> flip session status
 // to 'rejected'. See lib/inbox/decisions.ts for the guard/ordering.
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export async function POST(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  if (typeof id !== "string" || !UUID_RE.test(id)) {
+  if (!isValidSessionId(id)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 

@@ -23,6 +23,30 @@ function timeAgo(iso: string | null): string {
   return `${d}d ago`;
 }
 
+// Picks the most relevant timestamp per row for the always-visible
+// relative-time (spec: every row shows project · wave · branch · machine ·
+// model · relative time, collapsed). `updated_at` is the general default,
+// but a couple of statuses have a more specific, more useful moment:
+//   - running: `started_at` — "how long has this been running", not "when
+//     did we last hear a heartbeat" (which is what updated_at means here).
+//   - done: `ended_at` — "how long has this been sitting awaiting review".
+//   - reviewed/merged/rejected: the latest_decision's `created_at` — "how
+//     long ago was this decided" (matches recentlyDecided's own sort key).
+function primaryTimestamp(session: InboxSession): string | null {
+  switch (session.status) {
+    case "running":
+      return session.started_at ?? session.updated_at;
+    case "done":
+      return session.ended_at ?? session.updated_at;
+    case "reviewed":
+    case "merged":
+    case "rejected":
+      return session.latest_decision?.created_at ?? session.updated_at;
+    default:
+      return session.updated_at;
+  }
+}
+
 const STATUS_STYLE: Record<InboxSession["status"], string> = {
   planned: "bg-zinc-500/15 text-zinc-300 border-zinc-400/30",
   running: "bg-sky-500/15 text-sky-300 border-sky-400/30",
@@ -76,6 +100,12 @@ function SessionRow({
   const [feedback, setFeedback] = useState("");
   const [rowError, setRowError] = useState<string | null>(null);
 
+  // `running` rows are watchable, never actionable — enforced here (not just
+  // by the "Needs you" section passing showActions={false}) so this holds
+  // regardless of which section a row ends up rendered in.
+  const isRunning = session.status === "running";
+  const canDecide = showActions && !isRunning;
+
   async function commit(action: DecisionAction) {
     setPending(action);
     setRowError(null);
@@ -90,7 +120,13 @@ function SessionRow({
   }
 
   return (
-    <li className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3">
+    <li
+      className={`rounded-xl border px-4 py-3 ${
+        isRunning
+          ? "border-white/5 bg-white/[0.01] opacity-70"
+          : "border-white/10 bg-white/[0.02]"
+      }`}
+    >
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
@@ -103,9 +139,12 @@ function SessionRow({
             </span>
             <StatusPill session={session} />
           </div>
+          {/* Always-visible summary: project · wave · branch · machine ·
+              model · relative time — none of this should require expanding. */}
           <p className="mt-1 truncate text-xs text-zinc-400">
             {session.project ?? "—"} · {session.wave_name ?? "ungrouped"} ·{" "}
-            {session.machine_name ?? "—"}
+            {session.branch ?? "—"} · {session.machine_name ?? "—"} ·{" "}
+            {session.model ?? "—"} · {timeAgo(primaryTimestamp(session))}
           </p>
           {session.last_message && (
             <p className="mt-1 truncate text-xs text-zinc-500">
@@ -132,12 +171,6 @@ function SessionRow({
             <p>
               <span className="text-zinc-500">Prompt: </span>
               {session.prompt_ref}
-            </p>
-          )}
-          {session.branch && (
-            <p>
-              <span className="text-zinc-500">Branch: </span>
-              {session.branch}
             </p>
           )}
           {session.last_message && (
@@ -185,7 +218,7 @@ function SessionRow({
         </div>
       )}
 
-      {showActions && (
+      {canDecide && (
         <div className="mt-3 border-t border-white/10 pt-3">
           {rowError && (
             <p className="mb-2 text-xs text-rose-400">{rowError}</p>

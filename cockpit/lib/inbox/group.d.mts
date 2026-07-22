@@ -20,11 +20,15 @@ export interface InboxGroupsLike<T extends InboxSessionLike = InboxSessionLike> 
 
 /**
  * Buckets `sessions` into the three Inbox groups and sorts each:
- *   - needsYou / awaitingReview: by `updated_at` descending (most recent first).
+ *   - needsYou: `waiting` sessions (updated_at desc) followed, quietly, by
+ *     `running` sessions (updated_at desc) — both watchable, neither
+ *     actionable; each item keeps its own `status` so the UI can tell them
+ *     apart.
+ *   - awaitingReview: `done` sessions, by `updated_at` descending.
  *   - recentlyDecided: by `latest_decision.created_at` descending (falls back
- *     to `updated_at` if absent), capped at `recentlyDecidedLimit` (default 20).
- * `planned`/`running` sessions are excluded from every group. Pure — does not
- * mutate the input array.
+ *     to `updated_at` if absent), capped at `recentlyDecidedLimit` (default 10).
+ * `planned` sessions are excluded from every group. Pure — does not mutate
+ * the input array.
  */
 export declare function groupInboxSessions<T extends InboxSessionLike>(
   sessions: T[],

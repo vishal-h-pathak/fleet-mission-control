@@ -15,6 +15,7 @@ import type {
 // only code path that can read them at all.
 
 const INBOX_STATUSES: SessionStatus[] = [
+  "running",
   "waiting",
   "done",
   "reviewed",
@@ -71,8 +72,11 @@ function firstOf<T>(value: T | T[] | null): T | null {
  * enum subset), joined to wave/machine name, plus each session's latest
  * fleet_decisions row, and buckets them via the pure groupInboxSessions.
  *
- * planned/running sessions are intentionally never fetched — see
- * lib/inbox/group.mjs's header for why they're out of scope for Inbox v1.
+ * `planned` sessions are intentionally never fetched — they're not yet
+ * dispatched work, Waves-board (M3) territory, not a review decision.
+ * `running` sessions ARE fetched: per docs/SCHEMA_V2.md they belong in the
+ * Inbox's "needs you" group (watchable, not actionable) — see
+ * lib/inbox/group.mjs's header for the bucketing detail.
  */
 export async function getInboxGroups(): Promise<InboxGroups> {
   const supabase = getAdminClient();

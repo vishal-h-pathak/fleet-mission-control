@@ -111,16 +111,74 @@ ok("status routes to the correct bucket", () => {
   );
 });
 
-ok("planned/running sessions are excluded from every group (Waves-board territory, not Inbox v1)", () => {
+ok("planned sessions are excluded from every group (Waves-board territory, not Inbox v1)", () => {
   const planned = session({ id: "p", status: "planned" });
-  const running = session({ id: "r", status: "running" });
-  const result = groupInboxSessions([planned, running]);
+  const result = groupInboxSessions([planned]);
   assert.deepEqual(result, {
     needsYou: [],
     awaitingReview: [],
     recentlyDecided: [],
   });
 });
+
+ok("running sessions land in needsYou, quietly, after waiting sessions", () => {
+  const running = session({
+    id: "r",
+    status: "running",
+    updated_at: "2026-07-22T13:00:00.000Z", // newer than the waiting session below
+  });
+  const waiting = session({
+    id: "w",
+    status: "waiting",
+    updated_at: "2026-07-22T09:00:00.000Z",
+  });
+  const result = groupInboxSessions([running, waiting]);
+  // Even though `running` has the more recent updated_at, `waiting` sessions
+  // always sort ahead of `running` ones within needsYou — running is only
+  // ever quietly appended below, per docs/SCHEMA_V2.md.
+  assert.deepEqual(
+    result.needsYou.map((s) => s.id),
+    ["w", "r"],
+  );
+  assert.equal(result.awaitingReview.length, 0);
+  assert.equal(result.recentlyDecided.length, 0);
+});
+
+ok("multiple running sessions within needsYou still sort by updated_at descending", () => {
+  const older = session({
+    id: "r-older",
+    status: "running",
+    updated_at: "2026-07-22T08:00:00.000Z",
+  });
+  const newer = session({
+    id: "r-newer",
+    status: "running",
+    updated_at: "2026-07-22T11:00:00.000Z",
+  });
+  const waiting = session({
+    id: "w",
+    status: "waiting",
+    updated_at: "2026-07-22T09:00:00.000Z",
+  });
+  const result = groupInboxSessions([older, waiting, newer]);
+  assert.deepEqual(
+    result.needsYou.map((s) => s.id),
+    ["w", "r-newer", "r-older"],
+  );
+});
+
+// The grouping function only decides which *group* a session lands in — it
+// carries no notion of "decision affordance" (that's a UI-only concept: the
+// showActions prop, which app/inbox-view.tsx hard-wires to `false` for the
+// entire "Needs you" section for both `waiting` and `running` rows, and to
+// `true` only for the "Awaiting review" section's `done` rows). So there is
+// no pure-function assertion to add here for "running rows get no decision
+// buttons" — it's structurally guaranteed by that per-section showActions
+// wiring in inbox-view.tsx, not by anything groupInboxSessions returns. What
+// IS this module's job, and what the two tests above cover, is that a
+// `running` session's identity/status survives into needsYou unchanged
+// (so the UI has what it needs to render it without those affordances) and
+// that it sorts after `waiting` rows.
 
 ok("needsYou and awaitingReview sort by updated_at, most recent first", () => {
   const older = session({
@@ -194,7 +252,7 @@ ok("recentlyDecided falls back to updated_at when latest_decision is missing", (
   );
 });
 
-ok("recentlyDecided is capped at recentlyDecidedLimit (default 20)", () => {
+ok("recentlyDecided is capped at recentlyDecidedLimit (default 10)", () => {
   const many = Array.from({ length: 25 }, (_, i) =>
     session({
       id: `s${i}`,
@@ -207,7 +265,7 @@ ok("recentlyDecided is capped at recentlyDecidedLimit (default 20)", () => {
     }),
   );
   const result = groupInboxSessions(many);
-  assert.equal(result.recentlyDecided.length, 20);
+  assert.equal(result.recentlyDecided.length, 10);
   // Most recent (highest i) first.
   assert.equal(result.recentlyDecided[0].id, "s24");
 });

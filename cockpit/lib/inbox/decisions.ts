@@ -69,10 +69,30 @@ export async function applyDecision(
   });
 
   if (insertError) {
-    // Status already flipped; the audit row failed. Surface distinctly so
-    // this isn't confused with a plain failure — the human/Task 3 pass
-    // should investigate rather than retry blindly (retrying would 409 on
-    // the now-`not_awaiting_review` session).
+    // Status already flipped; the audit row failed. Best-effort compensate:
+    // flip the session back to 'done' so it doesn't get stuck in a terminal
+    // state with no fleet_decisions row to explain how it got there — a
+    // second, guarded UPDATE (only touches the row if it's still sitting in
+    // `nextStatus`, i.e. the one we just wrote) is within reach of the
+    // Supabase REST client, unlike a real fix. Residual race window (why
+    // this is "best-effort", not a real fix): this compensating update is
+    // NOT atomic with the failed insert above. If some other write — another
+    // decision request, a late ingest record — touches this exact row in the
+    // gap between our update succeeding and this one running, this could
+    // clobber that write instead of just our own. A real fix needs both
+    // writes wrapped in one Postgres transaction (a `supabase.rpc(...)`
+    // stored procedure), which is out of scope for this task. If the
+    // compensating update itself fails (or the row moved and the guard
+    // no-ops), we're left with the original gap: session stuck in
+    // `nextStatus`, no decision row — surfaced via the distinct 500 below so
+    // a human notices and investigates rather than the caller retrying
+    // blindly (a retry would just 409 on the now-non-'done' session).
+    await supabase
+      .from("fleet_sessions")
+      .update({ status: "done" })
+      .eq("id", sessionId)
+      .eq("status", nextStatus);
+
     return { ok: false, error: "decision_insert_failed", httpStatus: 500 };
   }
 

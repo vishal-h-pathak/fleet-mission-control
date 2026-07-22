@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { applyDecision } from "@/lib/inbox/decisions";
+import { isValidSessionId } from "@/lib/inbox/session-id";
 
 export const dynamic = "force-dynamic";
 
@@ -11,15 +12,12 @@ export const dynamic = "force-dynamic";
 // guard/ordering and lib/inbox/decisions-core.mjs for feedback validation
 // (required, non-blank, trimmed).
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  if (typeof id !== "string" || !UUID_RE.test(id)) {
+  if (!isValidSessionId(id)) {
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
