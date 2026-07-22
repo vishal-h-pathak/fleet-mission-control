@@ -93,6 +93,16 @@ or folder straight off the box to the Mac. That's the **fallback only** — a ha
 clean git path is unavailable. The primary, default channel is `git push`; reach for `cg artifact`
 only when push is broken (and then say so).
 
+## Steering a delegated run while it's live (`cg runi`)
+`cg run` hands a machine a *headless* job — it works, finishes, and reports; you can't watch or
+redirect it mid-run. `cg runi <repo> "<goal>"` is the **interactive** sibling: it starts a real,
+live Claude session on the box (in `tmux`, with remote-control on) and leaves it **running and
+steerable**. It seeds your goal, runs until the goal's "STOP and check with me" point, then waits —
+and you can step in from anywhere: `cg attach` for keyboard control over SSH, or tap the session's
+`/rc` link to steer it from your phone/browser, in sync. Picking up where it paused continues the
+*same* session with all its context — no fresh dispatch that re-reads everything. Use `cg runi` for
+anything that needs a go/no-go partway through; keep plain `cg run` for fully autonomous jobs.
+
 ## When a session finishes, you hear about it (the completion hook)
 Every machine also has a tiny **Claude Code hook** installed once (at the user level, so it
 covers *every* project automatically — `deploy/hooks/`). The moment any Code session ends —

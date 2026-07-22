@@ -1,9 +1,17 @@
 # Fleet Mission Control — Closing the loop (Cowork ⇄ Code completion notifications)
 
-> **Captured design + research — NOT yet built.** This is the brief a fresh chat picks up to
-> implement the run-finished notification feature (the concrete, researched expansion of
-> `ROADMAP.md` Phase D and `BRIEF.md` P3). Maintainer: Vishal. Date: 2026-06-22.
-> Read `BRIEF.md` (architecture) + `HOW_IT_WORKS.md` + `ROADMAP.md` first.
+> **✅ BUILT 2026-06-23.** This was the design brief for the run-finished notification feature +
+> interactive dispatch (the concrete expansion of `ROADMAP.md` Phase D and `BRIEF.md` P3). It is now
+> implemented; the design below is kept as the record. Maintainer: Vishal. Date: 2026-06-22 (built
+> 2026-06-23). Read `BRIEF.md` (architecture) + `HOW_IT_WORKS.md` + `ROADMAP.md` first.
+>
+> **What shipped:** the per-machine `SessionEnd`/`Notification` hook (F2-a, `deploy/hooks/`); the bus
+> path (F2-b — private `last_message` column + idempotent, preserve-on-null `ingest` v4, live on
+> `sbmsxerwgylpfkkkjtku`); the Cowork read pattern (F2-c, `docs/COWORK_INGEST.md` + `ops/queries/`);
+> `cg runi` interactive dispatch (F1) — live-validated, and interactive `--rc` **does** surface a
+> `/rc` URL where headless `-p` never did; `run-v`/`peekv` streaming (F3); and box git reliability
+> (F4, commit→push→STOP + verified `gh` push creds). **Remaining to flip fully live:** install the
+> hook on Mac + sentry from `main`, rotate the ntfy topic, and merge the portfolio cockpit branch.
 
 ## The problem (the workflow gap this closes)
 
