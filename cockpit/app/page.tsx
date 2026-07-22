@@ -1,18 +1,23 @@
 import { createClient } from "@/lib/supabase/server";
+import { getInboxGroups } from "@/lib/inbox/data";
+import { InboxView } from "./inbox-view";
 import { SignOutButton } from "./sign-out-button";
 
 // Authed content, reads the per-request session cookie — never static.
 export const dynamic = "force-dynamic";
 
-// Authed landing page. Reaching this point means middleware.ts already
-// confirmed a valid session AND an allowlisted email — no further auth check
-// needed here. Task 2 replaces the body content (the session inbox); it does
-// not touch the auth wrapper.
+// Authed landing page = the Inbox. Reaching this point means middleware.ts
+// already confirmed a valid session AND an allowlisted email — no further
+// auth check needed here. Fetches the initial three groups server-side
+// (admin client, no HTTP round-trip) so the first paint has real data;
+// InboxView takes over polling (/api/inbox) from there.
 export default async function Home() {
   const supabase = await createClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  const initialGroups = await getInboxGroups();
 
   return (
     <main className="mx-auto flex min-h-screen max-w-2xl flex-col px-6 py-8">
@@ -20,12 +25,11 @@ export default async function Home() {
         <h1 className="text-xl font-semibold text-zinc-50">MCv2 Cockpit</h1>
         <SignOutButton />
       </header>
-      <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-6">
-        <p className="text-sm text-zinc-400">
-          Signed in as <span className="text-zinc-200">{user?.email}</span>
-        </p>
-        <p className="mt-3 text-zinc-300">Inbox coming next.</p>
-      </div>
+      <p className="mt-2 text-sm text-zinc-400">
+        Signed in as <span className="text-zinc-200">{user?.email}</span>
+      </p>
+
+      <InboxView initialGroups={initialGroups} />
     </main>
   );
 }
