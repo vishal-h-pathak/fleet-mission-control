@@ -57,7 +57,7 @@ export async function middleware(request: NextRequest) {
     redirectUrl.pathname = "/login";
     redirectUrl.search = "";
     const redirect = NextResponse.redirect(redirectUrl);
-    response.cookies.getAll().forEach((c) => redirect.cookies.set(c.name, c.value));
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
     return redirect;
   }
 
@@ -68,7 +68,7 @@ export async function middleware(request: NextRequest) {
     redirectUrl.search = "";
     redirectUrl.searchParams.set("denied", "1");
     const redirect = NextResponse.redirect(redirectUrl);
-    response.cookies.getAll().forEach((c) => redirect.cookies.set(c.name, c.value));
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c));
     return redirect;
   }
 
