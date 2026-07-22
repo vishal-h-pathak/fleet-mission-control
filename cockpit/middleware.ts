@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { isAllowedEmail } from "@/lib/auth/allowlist.mjs";
+import { getSupabaseEnv } from "@/lib/supabase/env";
 
 // Gates every route except the login/callback routes themselves (see
 // `matcher` below, which excludes /login and /auth/callback):
@@ -17,9 +18,11 @@ import { isAllowedEmail } from "@/lib/auth/allowlist.mjs";
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({ request });
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
+  let url: string;
+  let anonKey: string;
+  try {
+    ({ url, anonKey } = getSupabaseEnv());
+  } catch {
     // Server misconfigured — fail closed rather than let traffic through
     // unauthenticated.
     return NextResponse.json(
@@ -53,7 +56,9 @@ export async function middleware(request: NextRequest) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.search = "";
-    return NextResponse.redirect(redirectUrl);
+    const redirect = NextResponse.redirect(redirectUrl);
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c.name, c.value));
+    return redirect;
   }
 
   if (!isAllowedEmail(user.email, process.env.COCKPIT_ALLOWED_EMAILS)) {
@@ -62,7 +67,9 @@ export async function middleware(request: NextRequest) {
     redirectUrl.pathname = "/login";
     redirectUrl.search = "";
     redirectUrl.searchParams.set("denied", "1");
-    return NextResponse.redirect(redirectUrl);
+    const redirect = NextResponse.redirect(redirectUrl);
+    response.cookies.getAll().forEach((c) => redirect.cookies.set(c.name, c.value));
+    return redirect;
   }
 
   return response;
@@ -71,7 +78,9 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     // Everything except: /login, /auth/callback, Next internals, and common
-    // static assets. Adjust the asset-extension list as the app grows.
-    "/((?!login|auth/callback|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    // static assets. Exact-segment exclusion (not prefix) so e.g. a future
+    // /login-help route doesn't incorrectly bypass auth. Adjust the
+    // asset-extension list as the app grows.
+    "/((?!login$|login/|auth/callback$|auth/callback/|_next/static|_next/image|favicon.ico$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

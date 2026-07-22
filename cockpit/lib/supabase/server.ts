@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { getSupabaseEnv } from "@/lib/supabase/env";
 
 // Server-side ANON-key client bound to the request's cookies, for Server
 // Components and Route Handlers that need to read the signed-in user's own
@@ -8,13 +9,7 @@ import { cookies } from "next/headers";
 // This is NOT the service-role admin client; see lib/supabase/admin.ts for
 // privileged reads/writes.
 export async function createClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !anonKey) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY",
-    );
-  }
+  const { url, anonKey } = getSupabaseEnv();
 
   const cookieStore = await cookies();
 

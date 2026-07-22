@@ -54,7 +54,7 @@ function LoginForm() {
       )}
       {callbackError && (
         <p className="mt-4 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-sm text-rose-300">
-          Sign-in link expired or was already used. Request a new one below.
+          Sign-in link is invalid or expired — request a new one below.
         </p>
       )}
 
