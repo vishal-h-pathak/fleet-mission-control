@@ -6,9 +6,29 @@ session — headless `cg run`, interactive `cg runi`, and local Mac sessions —
 
 1. **Pushes to the human** — desktop banner **+ ntfy-over-Tailscale** — carrying the
    session's final message + project/branch + the `/rc` link if the session had one
-   (tap-to-resume composes with Phase B).
+   (tap-to-resume composes with Phase B). If a draft PR was created/found (below), the
+   push's `Click:` target prefers the **PR URL** over `/rc` and the body gains a short
+   "PR ready for review" line.
 2. **Writes a completion record into the fleet bus** — POSTs to `ingest` with this
    machine's reporter token so Cowork can read that a session finished + its result.
+3. **(MCv2 M0) Ensures an idempotent draft PR exists** for the session's pushed feature
+   branch, via the machine's already-signed-in `gh` CLI (no new secret) — see below.
+
+### Draft-PR completion gate (MCv2 M0)
+On `SessionEnd`, after the push + bus behavior above, the hook also:
+- Skips silently (log only) when: `FLEET_PR_DISABLE=1`; not a git repo; detached HEAD;
+  the branch is the repo's default branch; the branch has no upstream (isn't pushed);
+  `gh` is missing; or `gh repo view` fails (unauthed / no GitHub remote / `gh` broken).
+- **Reuses** an existing draft/open PR for the branch if one exists (`gh pr list
+  --head <branch>`) — never creates a duplicate.
+- Else creates one: `gh pr create --draft --base <default-branch> --head <branch>
+  --title "<branch> — <project>"`, body = the session's final message (capped at
+  `FLEET_PR_BODY_MAXLEN`) + a footer with the `/rc` URL (if any), the machine job name,
+  and a `fleet-mission-control` marker line.
+- Every `gh` call is time-boxed (`timeout`/`gtimeout` wrapping `FLEET_HOOK_CURL_MAX_TIME`,
+  or unguarded if neither is on PATH) and its failure swallowed + logged — the hook
+  **never pushes code** and always exits 0. The bus POST carries the resulting `pr_url`
+  (empty/omitted when there is none), same sensitive tier as `rc_url`.
 
 Backstop (already built, not here): the reporter's tmux-disappear detection still
 marks crashed/killed sessions `finished` in the bus — without the rich message —
@@ -52,15 +72,18 @@ tail -f ~/.fleet/hook.log         # every fire logs here (push/POST results)
 # End any Claude session → desktop banner + ntfy push; SessionEnd also POSTs the bus.
 ```
 
-## Bus POST contract (coordinate with F2-b `bus`)
+## Bus POST contract (coordinate with the sibling MCv2 `schema` session)
 ```json
 { "jobs": [ { "name": "<tmux/session name>", "project": "<repo>",
              "kind": "claude-session", "status": "finished", "ended_at": "<iso>",
-             "last_message": "<final assistant text>", "rc_url": "<.../rc if known>" } ] }
+             "last_message": "<final assistant text>", "rc_url": "<.../rc if known>",
+             "pr_url": "<draft PR url if one was created/found>" } ] }
 ```
-`status:"finished"` is public (`fleet_jobs`); `last_message` + `rc_url` are sensitive
-→ routed to private `fleet_job_links`. **Pending in `bus`:** the `last_message`
-column does not exist yet, and `ingest` matches existing rows by `status='running'`
-so a `finished` POST currently inserts a *new* row (idempotency fix is F2-b's). The
-hook is correct against the agreed contract; DB-side confirmation of `last_message`
-is deferred to the migration.
+`status:"finished"` is public (`fleet_jobs`); `last_message` + `rc_url` + `pr_url` are
+sensitive → routed to private storage (`fleet_job_links` / `fleet_sessions`). `pr_url`
+is a new MCv2 M0 field, sent whenever a draft PR exists — omitted (not an empty string)
+when there is none. **Pending in `bus`:** the `last_message` column does not exist yet,
+and `ingest` matches existing rows by `status='running'` so a `finished` POST currently
+inserts a *new* row (idempotency fix + `pr_url` routing are the sibling `schema`
+session's). The hook is correct against the agreed contract; DB-side wiring is deferred
+to that migration.

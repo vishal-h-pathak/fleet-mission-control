@@ -12,6 +12,16 @@
 > `/rc` URL where headless `-p` never did; `run-v`/`peekv` streaming (F3); and box git reliability
 > (F4, commit→push→STOP + verified `gh` push creds). **Remaining to flip fully live:** install the
 > hook on Mac + sentry from `main`, rotate the ntfy topic, and merge the portfolio cockpit branch.
+>
+> **MCv2 M0 addendum (2026-07-22):** the hook now also formalizes the review gate itself. On
+> `SessionEnd` it ensures an idempotent **draft PR** exists for the session's pushed feature branch
+> (via the machine's already-signed-in `gh` CLI — no new secret), reusing rather than duplicating one
+> across re-fires. The bus POST carries the resulting `pr_url` (same sensitive tier as `rc_url`), and
+> the ntfy push's `Click:` target now prefers the PR URL over `/rc` when both exist — "nothing
+> auto-ships" becomes concrete: the draft PR **is** the gate, and it's phone-reviewable the moment a
+> session ends, before any cockpit UI exists. Fail-soft unchanged: no `gh`/no remote/unpushed
+> branch/default branch all skip silently; see `deploy/hooks/README.md` for the exact skip conditions
+> and `ops/prompts/PROMPT_mcv2_hook_pr.md` / `docs/V2_PLAN.md` for the milestone this shipped under.
 
 ## The problem (the workflow gap this closes)
 
