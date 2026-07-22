@@ -25,3 +25,34 @@ Conventions (mirrors the sibling `cellular-gaits` and `portfolio` repos):
 
 Project docs (BRIEF, ROADMAP, HOW_IT_WORKS, SCHEMA, plans, and the loop-closer design) stay in
 `docs/`; `README.md` + `ONBOARDING.md` stay at the root.
+
+## `ops/bin/` — helpers a launcher calls
+
+`fleet-register-wave.mjs` (MCv2, zero-dep Node 18+ ESM) records a dispatched wave of `planned`
+sessions on the fleet bus so each Code run exists as a work item *before* it runs; ingest v5 then
+enriches it (planned → running → done) as telemetry lands. See `docs/SCHEMA_V2.md`.
+
+A `setup-*.sh` launcher registers the wave right after it decides the chunk table (branch / machine /
+model / prompt per chunk), before opening the sessions. Preview first (`--dry-run` needs no token),
+then register (needs `FLEET_TOKEN` for the dispatching machine):
+
+```bash
+# In setup-mcv2-wave1.sh, after the chunk list is known:
+cat > /tmp/mcv2-wave1.json <<'JSON'
+{ "project": "fleet-mission-control",
+  "wave": { "name": "mcv2-wave1", "notes": "M0 hook-pr ∥ M1 schema" },
+  "sessions": [
+    { "name": "feat/mcv2-hook-pr", "machine": "mac-cockpit", "branch": "feat/mcv2-hook-pr",
+      "model": "sonnet", "prompt_ref": "ops/prompts/PROMPT_mcv2_hook_pr.md" },
+    { "name": "feat/mcv2-schema",  "machine": "mac-cockpit", "branch": "feat/mcv2-schema",
+      "model": "opus",   "prompt_ref": "ops/prompts/PROMPT_mcv2_schema.md" }
+  ] }
+JSON
+
+node ops/bin/fleet-register-wave.mjs --dry-run --manifest /tmp/mcv2-wave1.json   # preview payload
+FLEET_TOKEN=… node ops/bin/fleet-register-wave.mjs --manifest /tmp/mcv2-wave1.json   # register → prints ids
+```
+
+Single-session shortcut (no manifest): `node ops/bin/fleet-register-wave.mjs --project portfolio
+--wave w1 --name feat/x --branch feat/x --machine sentry --model sonnet --prompt ops/prompts/PROMPT_x.md`.
+`--help` documents every flag. Registration only *records intent* — dispatch stays where it is today.
