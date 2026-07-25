@@ -36,9 +36,12 @@ camera-whispr-llm; owner `vishal-h-pathak`).
 
 ### `fleet_waves` — a dispatched set of sessions
 `id` uuid pk · `project_id`→projects · `name` · `status`
-(`draft|dispatched|reviewing|done|abandoned`) · `registered_by`→machines (audit: which
-machine POSTed the register block; null-on-delete) · `dispatched_at` · `notes` ·
-`created_at` · `updated_at`.
+(`draft|confirmed|launching|dispatched|reviewing|done|abandoned`) ·
+`registered_by`→machines (audit: which machine POSTed the register block;
+null-on-delete) · `dispatched_at` · `notes` · `created_at` · `updated_at` ·
+**M4 dispatch:** `confirmed_at` · `confirmed_by` (operator email) · `launch_error`.
+As of M4 this table is an **execution surface** — see "Wave dispatch lifecycle (M4)"
+below for the lifecycle, the who-may-set-what table, and the security invariants.
 
 ### `fleet_sessions` — a Code run as a work item
 `id` uuid pk · `wave_id`→waves **nullable** (null = the *ungrouped* bucket) ·
@@ -47,7 +50,8 @@ machine POSTed the register block; null-on-delete) · `dispatched_at` · `notes`
 `worktree` · `prompt_ref` (`ops/prompts/PROMPT_x.md`) · `directive` · `model` ·
 `status` (`planned|running|waiting|done|reviewed|merged|rejected|lost`) · `last_message` ·
 `rc_url` · `pr_url` · `dispatched_at` · `started_at` · `ended_at` · `created_at` ·
-`updated_at`.
+`updated_at` · **M4 dispatch:** `claimed_at` · `claimed_by`→machines · `launched_at` ·
+`launch_error`.
 Partial-unique `(machine_id, name) where status in ('planned','running','waiting')` — one
 **active** session per (machine,name), the enrichment match key (mirrors v1's
 `fleet_jobs_active_uniq`). Terminal rows (including `lost`) are exempt so a reused
@@ -221,6 +225,205 @@ Response (200): `{"ok":true, …, "registered": {"wave_id","project_id","session
 Error (400/500): `{"error":"register_<reason>"}`; the whole registration is rejected
 before any session write on a validation failure (wave insert is the first write).
 
+## Wave dispatch lifecycle (M4) — `fleet_waves` as an execution surface
+
+> **Design decision of record (operator, 2026-07-26).** Dispatch is **direct-poll**:
+> the machine agent polls the `dispatch` Edge Function for confirmed waves. There is
+> no `fleet_commands` row acting as the trigger. Consequence, non-negotiable:
+> `fleet_waves` stops being a passive record of a launch that already happened (the
+> v1 `register` semantics above) and becomes an **execution surface**, so it carries
+> command-queue-grade protections — explicit operator confirmation as the only
+> trigger, per-machine scoping, race-safe claims, full audit trail. The `merge` verb
+> is deferred and is not part of this contract.
+
+### Wave status transition table
+
+Who may set each transition. "Cockpit route" = an authed, operator-only server route
+(service-role, allowlisted owner email). "Agent" = the `dispatch` Edge Function acting
+on a token-authed machine's request. `→` rows not listed are **not reachable**.
+
+| From | To | Who may set it | Trigger / guard |
+|---|---|---|---|
+| — | `draft` | cockpit route (Compose) | a composed-but-unarmed wave. Inert: never polled. |
+| — | `dispatched` | ingest `register` block (machine token) | **legacy path, unchanged**: the Mac launcher already ran the sessions and is recording them. Never passes through `confirmed`. |
+| `draft` | `confirmed` | **cockpit route ONLY** | the operator's explicit go — the sole execution trigger. Stamps `confirmed_at` + `confirmed_by`; a DB check constraint rejects `confirmed` without both. |
+| `confirmed` | `launching` | agent (`claim`, on win) | first successful claim on any of the wave's sessions. Guarded `where status = 'confirmed'`, so concurrent winners are idempotent. |
+| `launching` | `launching` | agent (`claim`/`ack`) | further claims/acks while any session is still pending. |
+| `confirmed`/`launching` | `dispatched` | agent (`ack`) | no session is pending any more (every one has `launched_at` **or** `launch_error`). Sets wave `launch_error` = `"<n>/<total> sessions failed to launch"` when n ≥ 1. |
+| `dispatched` | `reviewing` → `done` | cockpit route | post-launch review flow (unchanged from v1). |
+| any | `abandoned` | cockpit route | the kill switch. `abandoned` is **not launchable**, so it stops further claims immediately, mid-flight included. |
+| `confirmed`/`launching` | *(stuck)* | staleness sweeper (doc'd follow-up, below) | surfaced, not auto-transitioned. |
+
+The agent side can **only** move a wave `confirmed → launching → dispatched`. It can
+never write `confirmed`, never resurrect `abandoned`/`done`, and never regress a wave
+the operator has moved on (every wave write is guarded on the status just read, so a
+stale conclusion loses cleanly instead of overwriting).
+
+### Session launch bookkeeping + claim semantics
+
+`claimed_at`/`claimed_by` are a **conditional-update advisory lock**. The lock is the
+UPDATE, not the read that precedes it:
+
+```sql
+update fleet_sessions
+   set claimed_at = now(), claimed_by = $auth_machine
+ where id = $session_id
+   and machine_id = $auth_machine     -- invariant (b), re-asserted at write time
+   and claimed_at is null             -- the lock
+   and status = 'planned'             -- never relaunch work that already ran
+```
+
+Exactly one caller matches a row; the loser matches zero and stands down. The
+function's pre-read exists only to produce a useful refusal *reason* — correctness
+rests entirely on this statement, which the database serializes.
+
+**Compensating re-check.** PostgREST cannot join the wave's status into that UPDATE,
+so a wave abandoned *between* the read and the write would otherwise leave a live
+claim on dead work. After winning, the function re-reads the wave; if it is no longer
+launchable it **releases the claim** (`where claimed_by = $auth_machine`, so it can
+only ever undo its own) and reports `wave_not_launchable`. Fail-closed: an unexpected
+read failure also releases.
+
+**A failed launch keeps its claim.** `launch_error` is terminal for the launch phase:
+the session is not re-offered by `poll`, so a broken launch can never become a
+relaunch loop. Recovery is an explicit operator re-dispatch, not an automatic retry.
+
+**`launched_at` is preserve-on-null** — a duplicate or late ack never restamps it. A
+success ack clears a prior `launch_error` (an agent that retried and won).
+
+### `dispatch` Edge Function — the three actions
+
+`POST /functions/v1/dispatch`, `Authorization: Bearer <per-machine token>` (sha256 →
+`fleet_machine_secrets`, identical to `ingest`/`commands`; `verify_jwt` OFF, auth
+enforced in-function). **A separate function from `ingest` by design**: ingest is a
+write-only telemetry sink whose worst case is bad data; this is an execution surface
+whose worst case is unauthorized code running on a box. Different abuse profiles →
+different blast radii, logs, and rollback. Errors are `4xx/5xx` with
+`{"error":"<reason>"}`; a *refused claim* is a **200** with `won:false` (it is a
+normal race outcome, not a fault). Every success response carries
+`{"ok":true,"machine_id":"<uuid>","at":"<iso>"}` plus the action's own fields.
+
+**`poll`** — this machine's launchable work. Bounded to 50 rows; the rest comes on the
+next poll. Also stamps `fleet_machines.last_seen_at` (polling proves liveness).
+
+```jsonc
+// request
+{ "action": "poll" }
+
+// 200
+{ "ok": true, "machine_id": "…", "at": "2026-07-26T…Z",
+  "work": [
+    { "wave":    { "id": "…", "name": "mcv2-wave3", "status": "confirmed",
+                   "project_id": "…",
+                   "project": { "name": "portfolio", "repo": "owner/portfolio",
+                                "default_branch": "main" } },
+      "session": { "id": "…", "name": "feat/x", "project": "portfolio",
+                   "repo": "owner/portfolio", "branch": "feat/x",
+                   "worktree": "../pf-wt/x", "model": "sonnet",
+                   "prompt_ref": "ops/prompts/PROMPT_x.md" } }
+  ] }
+```
+
+Selection predicate: `fleet_sessions.machine_id = <authed machine>` **and**
+`claimed_at is null` **and** `status = 'planned'` **and** the parent wave's status ∈
+{`confirmed`,`launching`}. The session object is **built from an allowlist**
+(`POLL_SESSION_FIELDS` = id, name, project, repo, branch, worktree, model,
+prompt_ref) — not by stripping fields — so a column added to `fleet_sessions` later
+cannot leak by default. **`directive`, `last_message`, `rc_url` and `pr_url` are never
+present.**
+
+**`claim`** — take the advisory lock on one session.
+
+```jsonc
+// request
+{ "action": "claim", "session_id": "<uuid>" }
+
+// 200 — won
+{ "ok": true, "machine_id": "…", "at": "…", "won": true, "session_id": "<uuid>" }
+
+// 200 — lost (a normal outcome, not an error)
+{ "ok": true, "machine_id": "…", "at": "…", "won": false, "reason": "already_claimed" }
+```
+
+`reason` ∈ `unknown_session` · `wave_not_launchable` · `session_not_launchable` ·
+`already_claimed`. **A session belonging to another machine returns `unknown_session`,
+identical to a nonexistent one** — invariant (b) covers information too: an agent must
+not be able to probe which session ids exist elsewhere in the fleet. Winning flips the
+wave `confirmed → launching`.
+
+**`ack`** — record what actually happened to the launch, and complete the wave.
+
+```jsonc
+// request
+{ "action": "ack", "session_id": "<uuid>", "ok": true }
+{ "action": "ack", "session_id": "<uuid>", "ok": false, "error": "tmux: session exists" }
+
+// 200
+{ "ok": true, "machine_id": "…", "at": "…", "wave_status": "dispatched" }
+```
+
+`ok` must be a boolean; `error` is optional, string, truncated to 2000 chars
+(defaulting to `"launch_failed"`). Errors: `ack_unknown_session` (missing, or another
+machine's) · `ack_not_claimed` (nobody holds the claim, or another machine does) —
+**only the machine that won the claim may ack it**.
+
+`ack` is deliberately weaker than `claim` in exactly two ways, both required for the
+audit trail to survive real timing: it does **not** check the wave's status (a late
+ack on an already-`dispatched` or `abandoned` wave must still record the session's
+outcome — the wave update is a separate, guarded step that simply no-ops), and it does
+**not** check the session's status (by ack time, ingest may already have flipped it
+`planned → running` from the launched process's own telemetry — that is the success
+path, not an error).
+
+### Security invariants
+
+- **(a) `confirmed` is the sole execution trigger, and only the authed cockpit route
+  may set it.** The `dispatch` function never writes `confirmed`. The ingest
+  `register` block cannot either: its accepted-status list
+  (`session-logic.mjs` `WAVE_STATUSES`) deliberately excludes `confirmed`/`launching`
+  and falls back to `dispatched`, so a *machine token can never arm work* — only an
+  authenticated operator can. Unit-tested (`the ingest register block cannot arm a
+  wave`). A DB check constraint additionally rejects any `confirmed` row lacking
+  `confirmed_at` + `confirmed_by`: no anonymous arming, ever.
+- **(b) Agents receive only their own machine's work.** The authed `machine_id` comes
+  from the token and *nothing in the request body can name a machine*. It is the first
+  filter on `poll` and is re-asserted inside the claim/ack UPDATEs. Cross-machine ids
+  are indistinguishable from nonexistent ones.
+- **(c) Directives are never transported to agents.** `fleet_sessions.directive` is
+  record-only by design. The agent constructs what it runs from validated structured
+  fields alone. Enforced by allowlist projection, not filtering (see `poll`).
+- **(d) The agent revalidates everything against its local allowlist regardless of
+  what the bus says — the bus is untrusted input to the agent.** Model, repo,
+  worktree path, prompt_ref and branch are all re-checked machine-side against
+  `agent/allowlist.mjs` before anything is spawned (`shell:false`, fixed repo set).
+  The poll response includes the wave's project registry entry precisely so the agent
+  can cross-check the session's own `repo` against it. A compromised or buggy bus row
+  must not be sufficient to run code.
+
+### Staleness sweeper — doc'd follow-up (not implemented this wave)
+
+`fleet_sweep_stale_sessions()` (deployed, wave 2) covers stale *sessions* only. The
+dispatch lifecycle adds a wave-level stall: a wave armed by the operator that no agent
+ever picks up (machine offline/asleep) sits in `confirmed` forever, and one whose
+agent dies mid-launch sits in `launching` forever — in both cases the cockpit shows
+armed work that will never run. **Proposed predicate, to be added to the sweeper in a
+later wave (do not apply here):**
+
+```sql
+-- surface, do NOT auto-transition: armed work that never launched is an operator
+-- decision (retry vs abandon), not something a cron job should resolve.
+select w.id, w.name, w.status, w.confirmed_at
+  from public.fleet_waves w
+ where w.status in ('confirmed','launching')
+   and w.confirmed_at < now() - interval '2 hours';
+```
+
+Two hours is generous against a sleeping laptop while still catching a genuinely dead
+dispatch within one cockpit session. Surfacing (an Inbox/waves-board "stalled" badge,
+optionally an ntfy push) is the right response — auto-abandoning armed work would
+silently discard an operator's explicit go, and auto-retrying would relaunch work
+whose first attempt may have partially succeeded.
+
 ## `pr_url` contract (with the `hook-pr` sibling — M0)
 
 The auto-draft-PR hook adds `"pr_url": "<url>"` to its existing `jobs[]` entry (SENSITIVE,
@@ -238,6 +441,14 @@ The hook also begins sending an optional `"branch"` on the entry to power match 
    `fleet_sessions.status` and `dismissed` to `fleet_decisions.action`; adds
    `fleet_sweep_stale_sessions()` (staleness sweep, see `lost` semantics above) scheduled
    via `pg_cron` every 30 min.
+5. `20260726090000_fleet_mcv2_wave_dispatch.sql` — wave 3 (M4): the dispatch lifecycle.
+   Adds `confirmed`/`launching` to `fleet_waves.status` + `confirmed_at`/`confirmed_by`/
+   `launch_error` (with the "no anonymous arming" check constraint), the per-session
+   claim columns `claimed_at`/`claimed_by`/`launched_at`/`launch_error`, and two partial
+   indexes for the poll predicate. RLS/grants unchanged — new columns inherit the
+   existing deny-all posture. **Must be applied before the `dispatch` function is
+   deployed**; the function is on-branch only and is NOT deployed by the building
+   session.
 
 ### Known follow-up (out of scope this wave)
 `cockpit/lib/inbox/types.ts`'s `SessionStatus` union (`"planned"|"running"|"waiting"|
