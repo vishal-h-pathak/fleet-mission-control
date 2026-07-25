@@ -6,14 +6,19 @@ export const dynamic = "force-dynamic";
 
 // Authed via proxy.ts (see approve/route.ts's comment — same posture).
 //
-// Redispatch with feedback -> insert
-// fleet_decisions(action='redispatch_with_feedback', feedback=<text>) ->
-// flip session status to 'reviewed'. See lib/inbox/decisions.ts for the
-// guard/ordering and lib/inbox/decisions-core.mjs for feedback validation
-// (required, non-blank, trimmed).
+// Dismiss -> insert fleet_decisions(action='dismissed') -> flip session
+// status to 'reviewed', same transition as approve. Distinct action so the
+// audit trail (and the Inbox's "Recently decided" label) shows this was
+// noise-dismissed, not approved. See lib/inbox/decisions.ts for the
+// guard/ordering. CONTRACT NOTE: 'dismissed' is not yet in the live
+// fleet_decisions.action check constraint — the sibling `hardening` session's
+// migration adds it, applied by the planner at consolidation. Until then this
+// route's insert is expected to fail (see lib/inbox/decisions.ts's
+// insertError branch) — that's a known, expected-pending-migration state,
+// not a bug in this route.
 
 export async function POST(
-  req: NextRequest,
+  _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -21,21 +26,7 @@ export async function POST(
     return NextResponse.json({ error: "invalid_id" }, { status: 400 });
   }
 
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
-  }
-
-  const feedback =
-    body && typeof body === "object" && "feedback" in body
-      ? (body as { feedback?: unknown }).feedback
-      : undefined;
-
-  const result = await applyDecision(id, "redispatch_with_feedback", {
-    feedback,
-  });
+  const result = await applyDecision(id, "dismissed", {});
   if (!result.ok) {
     return NextResponse.json(
       { error: result.error },

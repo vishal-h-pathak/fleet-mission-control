@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Cockpit allowlist self-test (offline, zero deps). Covers the
 // COCKPIT_ALLOWED_EMAILS comma-separated / trimmed / case-insensitive compare
-// used by middleware.ts to gate authed-but-unauthorized sessions.
+// used by proxy.ts to gate authed-but-unauthorized sessions.
 //   node lib/auth/allowlist.test.mjs   (exit 0 = all passed)
 
 import assert from "node:assert/strict";

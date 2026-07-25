@@ -15,7 +15,7 @@ import { getSupabaseEnv } from "@/lib/supabase/env";
 // JWT against Supabase's Auth server rather than trusting an unverified
 // cookie — the correct check to run in server/middleware code per Supabase's
 // Next.js SSR guidance.
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request });
 
   let url: string;

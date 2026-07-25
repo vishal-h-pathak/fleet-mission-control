@@ -39,6 +39,10 @@ ok("reject -> rejected", () => {
   assert.equal(nextStatusForDecision("reject"), "rejected");
 });
 
+ok("dismissed -> reviewed", () => {
+  assert.equal(nextStatusForDecision("dismissed"), "reviewed");
+});
+
 ok("unknown action throws", () => {
   assert.throws(() => nextStatusForDecision("approve"), /unknown decision action/);
   assert.throws(() => nextStatusForDecision(""), /unknown decision action/);
@@ -57,6 +61,16 @@ ok("validateDecisionPayload: approve_merge ignores an incidental feedback field"
 
 ok("validateDecisionPayload: reject needs no feedback", () => {
   const result = validateDecisionPayload("reject", {});
+  assert.deepEqual(result, { ok: true, feedback: null });
+});
+
+ok("validateDecisionPayload: dismissed needs no feedback", () => {
+  const result = validateDecisionPayload("dismissed", {});
+  assert.deepEqual(result, { ok: true, feedback: null });
+});
+
+ok("validateDecisionPayload: dismissed ignores an incidental feedback field", () => {
+  const result = validateDecisionPayload("dismissed", { feedback: "noise" });
   assert.deepEqual(result, { ok: true, feedback: null });
 });
 
