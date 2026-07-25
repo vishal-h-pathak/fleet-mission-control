@@ -7,10 +7,15 @@
 // Session lifecycle. Non-terminal rows are the enrichment/registration match set
 // (mirrors fleet_sessions_active_uniq). Operator-terminal states are decisions the
 // operator made in the cockpit and are never downgraded by a late telemetry record.
+// `lost` (staleness sweep, pg_cron) is telemetry-terminal like `done` — deliberately
+// NOT in SESSION_NONTERMINAL, so match-ladder tiers 2/3 skip it (a later record for
+// the same machine+name starts a fresh session rather than reopening it), while tier
+// 1 (job_id, no status filter) still finds it, letting a genuine late hook/backstop
+// record flip it to `done` via nextSessionStatus below.
 export const SESSION_NONTERMINAL = new Set(["planned", "running", "waiting"]);
 export const SESSION_OPERATOR_TERMINAL = new Set(["reviewed", "merged", "rejected"]);
 export const SESSION_STATUSES = [
-  "planned", "running", "waiting", "done", "reviewed", "merged", "rejected",
+  "planned", "running", "waiting", "done", "reviewed", "merged", "rejected", "lost",
 ];
 export const WAVE_STATUSES = ["draft", "dispatched", "reviewing", "done", "abandoned"];
 
@@ -21,13 +26,17 @@ export const NAME_RE = /^[A-Za-z0-9._/-]{1,200}$/;
 // The status a session moves to when a telemetry record arrives.
 //   • operator-terminal (reviewed/merged/rejected) is sticky — a stray record can't
 //     reopen a decision the operator already made.
-//   • a terminal record (finished/failed/stopped) ⇒ done.
-//   • a running record ⇒ running, but never re-opens an already-`done` session
-//     (guards against an out-of-order running heartbeat after the finish).
+//   • a terminal record (finished/failed/stopped) ⇒ done, even from `lost` — this is
+//     the "genuine late hook/backstop record flips lost → done" case (only reachable
+//     via the job_id-anchored tier 1 match, since lost is excluded from the
+//     name/branch tiers).
+//   • a running record ⇒ running, but never re-opens an already-`done` OR
+//     already-`lost` session (guards against an out-of-order running heartbeat
+//     arriving after the finish, or after the sweep already gave up on it).
 export function nextSessionStatus(cur, isTerminal) {
   if (SESSION_OPERATOR_TERMINAL.has(cur)) return cur;
   if (isTerminal) return "done";
-  if (cur === "done") return "done";
+  if (cur === "done" || cur === "lost") return cur;
   return "running";
 }
 
