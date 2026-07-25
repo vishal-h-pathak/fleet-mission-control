@@ -24,7 +24,7 @@ export function timeAgo(iso: string | null): string {
   return `${d}d ago`;
 }
 
-// All seven statuses get an entry — the Inbox never renders `planned` (it
+// All eight statuses get an entry — the Inbox never renders `planned` (it
 // excludes those sessions), but the Waves board does, so this map has to
 // cover it anyway.
 export const STATUS_STYLE: Record<SessionStatus, string> = {
@@ -35,6 +35,7 @@ export const STATUS_STYLE: Record<SessionStatus, string> = {
   reviewed: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
   merged: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
   rejected: "bg-rose-500/15 text-rose-300 border-rose-400/30",
+  lost: "bg-neutral-500/15 text-neutral-400 border-neutral-400/30",
 };
 
 // proxy.ts 302-redirects to /login whenever the Supabase session is

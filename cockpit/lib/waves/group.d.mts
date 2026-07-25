@@ -12,7 +12,8 @@ export type SessionStatusLike =
   | "done"
   | "reviewed"
   | "merged"
-  | "rejected";
+  | "rejected"
+  | "lost";
 
 export interface WaveSessionLike {
   id: string;

@@ -7,7 +7,7 @@
 // standalone, dependency-free unit — any object with these fields works.
 
 export interface InboxSessionLike {
-  status: "planned" | "running" | "waiting" | "done" | "reviewed" | "merged" | "rejected";
+  status: "planned" | "running" | "waiting" | "done" | "reviewed" | "merged" | "rejected" | "lost";
   updated_at: string;
   latest_decision?: { created_at: string } | null;
 }

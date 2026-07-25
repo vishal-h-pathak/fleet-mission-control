@@ -11,7 +11,8 @@ export type SessionStatus =
   | "done"
   | "reviewed"
   | "merged"
-  | "rejected";
+  | "rejected"
+  | "lost";
 
 /** `fleet_decisions.action` enum, per docs/SCHEMA_V2.md. */
 export type DecisionAction =

@@ -112,7 +112,12 @@ fleet_register_dispatch() {
   [ -f "$_FLEET_REG_BIN" ] || { echo "WARN: fleet_register_dispatch — $_FLEET_REG_BIN missing, skipping." >&2; return 0; }
 
   local sessions_json manifest
-  sessions_json="$(printf '%s\n' "${_FLEET_REG_SESSIONS[@]}" | jq -s '.')"
+  # Default each session's `project` to the manifest's project when the session
+  # didn't set its own — fleet_register_add doesn't take a per-session project,
+  # so without this every registered row lands with project=null, defeating the
+  # (machine,project,branch) match rung (live gap found consolidating wave 2).
+  sessions_json="$(printf '%s\n' "${_FLEET_REG_SESSIONS[@]}" | jq -s \
+    --arg project "$_FLEET_REG_PROJECT" '[.[] | .project //= $project]')"
   manifest="$(mktemp 2>/dev/null)" || { echo "WARN: fleet_register_dispatch — mktemp failed, skipping." >&2; return 0; }
   jq -n \
     --arg project "$_FLEET_REG_PROJECT" \
