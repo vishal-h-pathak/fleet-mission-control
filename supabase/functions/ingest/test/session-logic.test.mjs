@@ -143,6 +143,13 @@ test("nextSessionStatus transition table", () => {
     assert.equal(nextSessionStatus(op, true), op, `${op} is sticky vs terminal record`);
     assert.equal(nextSessionStatus(op, false), op, `${op} is sticky vs running record`);
   }
+  assert.equal(nextSessionStatus("lost", false), "lost", "stray running never reopens lost");
+  assert.equal(nextSessionStatus("lost", true), "done", "a genuine late terminal record flips lost -> done");
+});
+
+test("SESSION_NONTERMINAL excludes lost (telemetry-terminal like done)", () => {
+  assert.ok(!SESSION_NONTERMINAL.has("lost"));
+  assert.ok(!SESSION_NONTERMINAL.has("done"));
 });
 
 test("pickSessionMatch obeys job_id > name > project+branch > create", () => {
@@ -235,4 +242,79 @@ test("operator-terminal session is sticky against a late record", () => {
   s.sessions[0].status = "merged";             // operator merged it in the cockpit
   ingest(s, { machine_id: M, name: "claude-1", kind: "claude-session", status: "finished" });
   assert.equal(s.sessions[0].status, "merged", "merged stays merged");
+});
+
+// ── Staleness sweep interop (the pg_cron sweeper flips a row to `lost` directly in
+//    Postgres — these tests simulate that DB-side transition, then exercise ingest's
+//    reaction to later telemetry, since the sweep itself isn't pure JS to unit-test).
+//
+// IMPORTANT precondition modeled here: the sweep's own eligibility predicate only
+// marks a `running` session `lost` when its linked fleet_jobs row is no longer live
+// (see the migration), and the sweep closes that fleet_jobs row to `stopped` in the
+// same pass. This matters because v1's job upsert (untouched, out of scope) reuses
+// an EXISTING row only while its status is `running`; if the sweep left the job row
+// at `running` forever, the next real telemetry for the same (machine,name) would
+// silently rebind to the dead job_id and land right back on the lost session via
+// ingest's job_id anchor (which has no status filter) — breaking the "a later real
+// record must start a fresh session" requirement. Closing the job row preserves
+// v1's own job_id-freshness guarantee, so `closeJob` below is not test scaffolding
+// convenience, it's asserting a real invariant the migration must uphold.
+function closeJob(store, jobId) {
+  const j = store.jobs.find((r) => r.id === jobId);
+  if (j) j.status = "stopped";
+}
+
+test("reused (machine,name) after a lost session starts a fresh session, not a reopen", () => {
+  const s = makeStore();
+  const planned = registerPlanned(s, { machine_id: M, name: "claude-1", project: "portfolio", branch: "feat/x" });
+  ingest(s, running());
+  assert.equal(s.sessions[0].id, planned.id);
+  const deadJobId = s.sessions[0].job_id;
+  s.sessions[0].status = "lost";               // pg_cron sweep: abrupt kill, no SessionEnd ever
+  closeJob(s, deadJobId);                      // ...and closes the linked job (see note above)
+  ingest(s, running());                        // same (machine,name) starts a new lifecycle
+  assert.equal(s.sessions.length, 2, "a new running record spawns a fresh session, does not reopen lost");
+  assert.equal(s.sessions[0].status, "lost", "the lost row is untouched");
+  assert.equal(s.sessions[1].status, "running");
+  assert.notEqual(s.sessions[1].id, planned.id);
+  assert.notEqual(s.sessions[1].job_id, deadJobId, "fresh lifecycle gets a fresh job_id, not the dead one");
+});
+
+test("Terminal.app fallback (machine,project,branch) also skips a lost row, creates fresh", () => {
+  const s = makeStore();
+  const planned = registerPlanned(s, { machine_id: M, name: "feat/x-planned", project: "portfolio", branch: "feat/x" });
+  ingest(s, running({ name: "claude-ab12cd34" }));
+  assert.equal(s.sessions[0].id, planned.id);
+  closeJob(s, s.sessions[0].job_id);
+  s.sessions[0].status = "lost";
+  ingest(s, running({ name: "claude-ef56gh78" })); // a fresh Terminal.app session, same project+branch
+  assert.equal(s.sessions.length, 2, "does not match the lost row via the branch fallback tier");
+  assert.equal(s.sessions[1].wave_id, null, "fresh session lands ungrouped, not bound to the old wave");
+});
+
+test("late hook record after a sweep-marked lost session still flips it to done (name-match terminal fallback)", () => {
+  const s = makeStore();
+  ingest(s, running());                        // job_id bound on first touch
+  const deadJobId = s.sessions[0].job_id;
+  s.sessions[0].status = "lost";               // sweep gave up on it (job never reported terminal in time)
+  closeJob(s, deadJobId);
+  ingest(s, finished());                       // the hook's SessionEnd finally lands for the same name
+  assert.equal(s.sessions.length, 1, "v1's terminal-fallback (match by name when isTerminal) reunites with the closed job — no duplicate");
+  assert.equal(s.sessions[0].job_id, deadJobId, "same job_id, now closed out by the terminal record instead of the sweep");
+  assert.equal(s.sessions[0].status, "done", "genuine late terminal record flips lost -> done");
+  assert.equal(s.sessions[0].last_message, "done!");
+});
+
+test("a race: a non-terminal record still carrying the dead job_id never reopens a lost row", () => {
+  // Not reachable via the normal (machine,name)-keyed upsert path once the sweep has
+  // closed the job (see the tests above) — this exercises the job_id anchor directly
+  // (e.g. a replayed/duplicate request racing the sweep) to prove nextSessionStatus's
+  // defense-in-depth: `lost` is sticky against a non-terminal record, mirroring `done`.
+  const s = makeStore();
+  ingest(s, running());
+  const deadJobId = s.sessions[0].job_id;
+  s.sessions[0].status = "lost";
+  enrichSession(s, running(), deadJobId);      // forces the tier-1 job_id anchor directly
+  assert.equal(s.sessions.length, 1, "still the same row via job_id");
+  assert.equal(s.sessions[0].status, "lost", "a non-terminal record never reopens lost, mirrors done");
 });

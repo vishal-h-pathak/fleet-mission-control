@@ -95,11 +95,27 @@ if [ -n "${TMUX:-}" ] && command -v tmux >/dev/null 2>&1; then
   TMUX_NAME="$(tmux display-message -p '#S' 2>/dev/null)"
 fi
 
+# Repo basename from `origin`'s URL (ssh `git@host:owner/repo.git` or https
+# `https://host/owner/repo.git`, `.git` suffix optional) — stable across worktrees,
+# where the toplevel dir is the worktree name (e.g. "mcv2-hardening"), not the repo
+# name ("fleet-mission-control"). Prints nothing (and returns non-zero) when there's
+# no origin remote, so the caller can fall back.
+origin_repo_basename() {
+  local url base
+  url="$(git -C "$CWD" remote get-url origin 2>/dev/null)"
+  [ -n "$url" ] || return 1
+  base="${url##*/}"
+  base="${base%.git}"
+  [ -n "$base" ] || return 1
+  printf '%s' "$base"
+}
+
 PROJECT=""
 BRANCH=""
 if command -v git >/dev/null 2>&1; then
   TOPLEVEL="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null)"
-  [ -n "$TOPLEVEL" ] && PROJECT="$(basename "$TOPLEVEL")"
+  PROJECT="$(origin_repo_basename)"
+  [ -z "$PROJECT" ] && [ -n "$TOPLEVEL" ] && PROJECT="$(basename "$TOPLEVEL")"
   BRANCH="$(git -C "$CWD" rev-parse --abbrev-ref HEAD 2>/dev/null)"
 fi
 [ -z "$PROJECT" ] && PROJECT="$(basename "$CWD" 2>/dev/null)"

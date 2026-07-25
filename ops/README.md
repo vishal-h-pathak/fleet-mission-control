@@ -56,3 +56,39 @@ FLEET_TOKEN=… node ops/bin/fleet-register-wave.mjs --manifest /tmp/mcv2-wave1.
 Single-session shortcut (no manifest): `node ops/bin/fleet-register-wave.mjs --project portfolio
 --wave w1 --name feat/x --branch feat/x --machine sentry --model sonnet --prompt ops/prompts/PROMPT_x.md`.
 `--help` documents every flag. Registration only *records intent* — dispatch stays where it is today.
+
+### `ops/waves/lib-register.sh` — sourceable wrapper for a `setup-*.sh` launcher
+
+Building the manifest heredoc above by hand (as `setup-mcv2-wave2.sh` does inline) works
+for one launcher; `lib-register.sh` extracts the same fail-soft pattern (mktemp manifest,
+`FLEET_TOKEN` from the repo's gitignored env, warn-never-abort) into functions a launcher
+sources instead of copy-pasting:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+source ops/waves/lib-register.sh
+
+fleet_register_init "fleet-mission-control" "mywave" "optional wave notes"
+fleet_register_add "chunk-a" "feat/chunk-a" "mac-cockpit" "sonnet" \
+                    "ops/prompts/PROMPT_chunk_a.md" "../fleet-wt/chunk-a" \
+                    "vishal-h-pathak/fleet-mission-control"
+fleet_register_add "chunk-b" "feat/chunk-b" "mac-cockpit" "opus" \
+                    "ops/prompts/PROMPT_chunk_b.md" "../fleet-wt/chunk-b"
+
+fleet_register_dispatch              # POSTs; prints the returned wave/session ids
+# fleet_register_dispatch --dry-run  # preview the payload only, no token needed
+
+# ... then open_session/add_worktree per chunk, as in setup-mcv2-wave1.sh
+```
+
+`FLEET_TOKEN` is read from `<repo-root>/.env` or `<repo-root>/.fleet-secrets.env` (first
+bare `FLEET_TOKEN=` line wins) — repo root defaults to two levels up from
+`ops/waves/lib-register.sh` itself, not the caller's cwd. **Gotcha:** a worktree launcher
+that only seeds `.fleet-secrets.env` (not `.env`) into the worktree won't find a token
+there — `.fleet-secrets.env` holds *per-machine* keys (`FLEET_TOKEN_MAC_COCKPIT=...`,
+`FLEET_TOKEN_SENTRY=...`, for distributing to each machine's own `reporter/.env`), not a
+bare `FLEET_TOKEN=`. Pass an explicit root to `fleet_register_dispatch <root>` (e.g. the
+main repo checkout, which has `.env`) if the launcher's own cwd doesn't have one. Missing
+token, jq, or node — or a non-200 response — all warn to stderr and return 0; a launcher
+should call this *before* opening sessions but never gate dispatch on its success.

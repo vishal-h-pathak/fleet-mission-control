@@ -45,16 +45,37 @@ machine POSTed the register block; null-on-delete) · `dispatched_at` · `notes`
 `machine_id`→machines · `job_id`→`fleet_jobs` **nullable** (the machine-centric join) ·
 `name` (tmux/job name; mirrors `fleet_jobs.name`) · `project` · `repo` · `branch` ·
 `worktree` · `prompt_ref` (`ops/prompts/PROMPT_x.md`) · `directive` · `model` ·
-`status` (`planned|running|waiting|done|reviewed|merged|rejected`) · `last_message` ·
+`status` (`planned|running|waiting|done|reviewed|merged|rejected|lost`) · `last_message` ·
 `rc_url` · `pr_url` · `dispatched_at` · `started_at` · `ended_at` · `created_at` ·
 `updated_at`.
 Partial-unique `(machine_id, name) where status in ('planned','running','waiting')` — one
 **active** session per (machine,name), the enrichment match key (mirrors v1's
-`fleet_jobs_active_uniq`). Terminal rows are exempt so a reused branch name starts clean.
+`fleet_jobs_active_uniq`). Terminal rows (including `lost`) are exempt so a reused
+branch name starts clean.
+
+`lost` (wave 2 hardening): a Terminal/GUI Code session killed abruptly never fires
+SessionEnd, so without this status its row would sit `running`/`planned` forever —
+the reporter's tmux crash-backstop only covers tmux-tracked jobs. A `pg_cron`
+sweeper (`fleet_sweep_stale_sessions()`, `supabase/migrations/20260725183624_fleet_mcv2_lost_status_sweep.sql`,
+every 30 min) flips demonstrably-stale rows to `lost` under hard guardrails: never
+touches `done` or any operator-terminal row; `running`→`lost` requires BOTH no
+*live* linked `fleet_jobs` row (status `running` **and** heartbeated within the
+last 30 minutes — recency, not just status, since a one-shot GUI session's job row
+can sit at `status='running'` forever with no further heartbeat ever updating it)
+**and** the session itself untouched for ≥12h; `planned`→`lost` requires
+`dispatched_at` ≥48h old (no job exists yet for a planned session, so no job-side
+check applies). `lost` is **telemetry-terminal like `done`**: excluded from the
+partial-unique/match-ladder tiers 2–3 above, so a later real record for the same
+(machine,name) starts a fresh session rather than reopening it — see "Ingest v5 —
+session enrichment" below for why the sweeper also closes the linked `fleet_jobs`
+row, which is required (not incidental) for that guarantee to hold.
 
 ### `fleet_decisions` — append-only operator verdicts
 `id` uuid pk · `session_id`→sessions (cascade) · `action`
-(`approve_merge|redispatch_with_feedback|reject`) · `feedback` · `created_at`.
+(`approve_merge|redispatch_with_feedback|reject|dismissed`) · `feedback` · `created_at`.
+`dismissed` (wave 2 hardening) is the cockpit's noise-dismiss action — the
+waves-board sibling wave builds the UI; see the operator-driven transition table
+below for its effect on `fleet_sessions.status`.
 
 ### v1 touch-up
 `fleet_job_links.pr_url` text — the auto-PR hook's PR URL, private tier (see below).
@@ -105,6 +126,7 @@ name, private fields filled preserve-on-null, and status advanced per the table 
 | `running`  | `running` (fill fields) | → `done` |
 | `waiting`  | `running` | → `done` |
 | `done`     | `done` (no reopen) | `done` |
+| `lost`     | `lost` (no reopen) | → `done` |
 | `reviewed` / `merged` / `rejected` | unchanged (sticky) | unchanged (sticky) |
 
 `started_at` is stamped on the first → `running`; `ended_at` on the first → `done`; both
@@ -112,6 +134,19 @@ preserve-on-null. `waiting` ("needs you") is a valid state but the hook's
 `Notification`-driven signal is **out of scope for M1** — nothing sets `waiting` yet.
 Operator-terminal states (`reviewed`/`merged`/`rejected`, set by cockpit decisions) are
 never downgraded by a late telemetry record.
+
+`lost` (wave 2 hardening, set by the `pg_cron` sweeper, never by ingest itself) behaves
+exactly like `done` in this table: a stray running record never reopens it (guards
+against an out-of-order heartbeat arriving after the sweep already gave up), while a
+genuine late terminal record still flips it to `done` — reachable only via the job_id
+anchor (tier 1), since `lost` is excluded from the (machine,name)/(machine,project,branch)
+match tiers (2–3) same as `done`. `session-logic.mjs`'s `nextSessionStatus`:
+```js
+if (SESSION_OPERATOR_TERMINAL.has(cur)) return cur;
+if (isTerminal) return "done";
+if (cur === "done" || cur === "lost") return cur;
+return "running";
+```
 
 ### Status transitions — operator-driven (cockpit, M2 Inbox)
 
@@ -126,10 +161,12 @@ double-deciding).
 | `approve_merge` | → `reviewed` | operator approved; merge itself stays a manual/out-of-band step in M1 |
 | `redispatch_with_feedback` | → `reviewed` | `feedback` (required, non-blank) recorded on the decision row; re-dispatch itself is a later milestone's verb (M4 `run-wave`), not this table |
 | `reject` | → `rejected` | terminal; no further ingest record ever reopens it (see the sticky-operator-terminal rule above) |
+| `dismissed` | → `reviewed` | wave 2 hardening: the cockpit's noise-dismiss action (e.g. a stray/uninteresting `done` row) — same target status as `approve_merge`, distinguished only by `fleet_decisions.action` for audit; UI lands in the waves-board sibling wave |
 
 Only `done` sessions are eligible — the Inbox's "awaiting review" group is exactly this
-status. `waiting`/`planned`/`running` sessions have no decision action in M1 (they aren't
-finished work yet); already-`reviewed`/`merged`/`rejected` sessions are sticky and cannot
+status. `waiting`/`planned`/`running`/`lost` sessions have no decision action in M1 (they
+aren't finished work eligible for review — a `lost` session has no diff to review by
+construction); already-`reviewed`/`merged`/`rejected` sessions are sticky and cannot
 be re-decided.
 
 ### Race matrix (all paths converge on ONE row)
@@ -146,6 +183,9 @@ Anchored by step 1 (`job_id`); `pr_url`/`rc_url`/`last_message` preserve-on-null
 | Unregistered, hook-only | finished(3) creates ungrouped `done` → late backstop(1) | 1 row, `done` |
 | Name reuse after done | done row exists → new running(1 miss,2 miss→3) | new row; old `done` untouched |
 | Operator decided | `merged` → straggler finished(1) | stays `merged` |
+| Name reuse after lost | sweep: running→lost, closes job → new running(1 miss,2 miss→3) | new row; old `lost` untouched — **requires** the sweep to also close the linked `fleet_jobs` row (see `lost` semantics above), else the new record's v1 upsert would silently rebind to the dead job_id and hit tier 1 |
+| Late terminal after lost | running→lost(sweep, job closed) → finished(1, v1 by-name terminal fallback reunites with the closed job) | 1 row, `done`, `lost`→`done` via job_id anchor |
+| Late non-terminal race after lost | running→lost(sweep) → a running record still carrying the dead job_id (replay/race) | stays `lost` (job_id anchor finds it, `nextSessionStatus` refuses to reopen a non-operator-terminal telemetry-terminal row on a non-terminal record — mirrors `done`) |
 
 ## Ingest v5 — wave registration (`register` block)
 
@@ -194,3 +234,14 @@ The hook also begins sending an optional `"branch"` on the entry to power match 
    comments, idempotent project seeds.
 2. `20260722090100_fleet_mcv2_rls.sql` — RLS enable + zero-policy deny-all + revoke grants.
 3. `20260722090200_fleet_mcv2_pr_url.sql` — `pr_url` column on `fleet_job_links`.
+4. `20260725183624_fleet_mcv2_lost_status_sweep.sql` — wave 2 hardening: adds `lost` to
+   `fleet_sessions.status` and `dismissed` to `fleet_decisions.action`; adds
+   `fleet_sweep_stale_sessions()` (staleness sweep, see `lost` semantics above) scheduled
+   via `pg_cron` every 30 min.
+
+### Known follow-up (out of scope this wave)
+`cockpit/lib/inbox/types.ts`'s `SessionStatus` union (`"planned"|"running"|"waiting"|
+"done"|"reviewed"|"merged"|"rejected"`) predates `lost` and needs a `| "lost"` addition
+plus Inbox-grouping logic to route it somewhere sane (not "awaiting review" — a lost
+session has no diff). `cockpit/` is out of this wave's scope; flagged for the
+waves-board sibling wave or a follow-up.
