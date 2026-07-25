@@ -113,6 +113,25 @@ preserve-on-null. `waiting` ("needs you") is a valid state but the hook's
 Operator-terminal states (`reviewed`/`merged`/`rejected`, set by cockpit decisions) are
 never downgraded by a late telemetry record.
 
+### Status transitions — operator-driven (cockpit, M2 Inbox)
+
+Distinct from the ingest-driven table above: these three transitions are written by the
+cockpit's authed decision routes (service-role, never ingest), each pairing an append-only
+`fleet_decisions` insert with a guarded `fleet_sessions.status` update (`... where status =
+'done'`, so a session can only be decided once — a race loses cleanly rather than
+double-deciding).
+
+| Decision action (`fleet_decisions.action`) | Session status (must be `done`) → | Notes |
+|---|---|---|
+| `approve_merge` | → `reviewed` | operator approved; merge itself stays a manual/out-of-band step in M1 |
+| `redispatch_with_feedback` | → `reviewed` | `feedback` (required, non-blank) recorded on the decision row; re-dispatch itself is a later milestone's verb (M4 `run-wave`), not this table |
+| `reject` | → `rejected` | terminal; no further ingest record ever reopens it (see the sticky-operator-terminal rule above) |
+
+Only `done` sessions are eligible — the Inbox's "awaiting review" group is exactly this
+status. `waiting`/`planned`/`running` sessions have no decision action in M1 (they aren't
+finished work yet); already-`reviewed`/`merged`/`rejected` sessions are sticky and cannot
+be re-decided.
+
 ### Race matrix (all paths converge on ONE row)
 
 Anchored by step 1 (`job_id`); `pr_url`/`rc_url`/`last_message` preserve-on-null in both
