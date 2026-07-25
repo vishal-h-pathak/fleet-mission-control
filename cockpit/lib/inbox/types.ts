@@ -17,7 +17,8 @@ export type SessionStatus =
 export type DecisionAction =
   | "approve_merge"
   | "redispatch_with_feedback"
-  | "reject";
+  | "reject"
+  | "dismissed";
 
 export interface LatestDecision {
   action: DecisionAction;

@@ -6,7 +6,8 @@
 export type DecisionAction =
   | "approve_merge"
   | "redispatch_with_feedback"
-  | "reject";
+  | "reject"
+  | "dismissed";
 
 /** The two statuses an operator decision can move a session to. */
 export type OperatorStatus = "reviewed" | "rejected";

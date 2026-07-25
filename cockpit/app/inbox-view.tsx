@@ -53,6 +53,21 @@ const DECISION_LABEL: Record<DecisionAction, string> = {
   approve_merge: "Approved",
   redispatch_with_feedback: "Redispatch requested",
   reject: "Rejected",
+  dismissed: "Dismissed",
+};
+
+// Labels/styles for the generic (non-redispatch) confirm block below, shared
+// by approve/reject/dismiss.
+const CONFIRM_LABEL: Record<"approve_merge" | "reject" | "dismissed", string> = {
+  approve_merge: "approve",
+  reject: "reject",
+  dismissed: "dismiss",
+};
+
+const CONFIRM_BUTTON_STYLE: Record<"approve_merge" | "reject" | "dismissed", string> = {
+  approve_merge: "bg-emerald-500 text-zinc-950",
+  reject: "bg-rose-500 text-white",
+  dismissed: "bg-zinc-600 text-zinc-50",
 };
 
 function StatusPill({ session }: { session: InboxSession }) {
@@ -97,6 +112,10 @@ function SessionRow({
   // regardless of which section a row ends up rendered in.
   const isRunning = session.status === "running";
   const canDecide = showActions && !isRunning;
+  // Dismiss is only offered on ungrouped ("no-op") sessions — ones dispatched
+  // outside any registered wave, per the spec's "Dismiss on ungrouped/no-op
+  // sessions" wording.
+  const canDismiss = canDecide && session.wave_name === null;
 
   async function commit(action: DecisionAction) {
     setPending(action);
@@ -255,15 +274,9 @@ function SessionRow({
                 type="button"
                 disabled={pending !== null}
                 onClick={() => commit(confirming)}
-                className={`min-h-9 rounded-lg px-3 text-sm font-medium disabled:opacity-50 ${
-                  confirming === "reject"
-                    ? "bg-rose-500 text-white"
-                    : "bg-emerald-500 text-zinc-950"
-                }`}
+                className={`min-h-9 rounded-lg px-3 text-sm font-medium disabled:opacity-50 ${CONFIRM_BUTTON_STYLE[confirming]}`}
               >
-                {pending
-                  ? "Working…"
-                  : `Confirm ${confirming === "reject" ? "reject" : "approve"}`}
+                {pending ? "Working…" : `Confirm ${CONFIRM_LABEL[confirming]}`}
               </button>
               <button
                 type="button"
@@ -296,6 +309,15 @@ function SessionRow({
               >
                 Reject
               </button>
+              {canDismiss && (
+                <button
+                  type="button"
+                  onClick={() => setConfirming("dismissed")}
+                  className="min-h-9 rounded-lg border border-white/10 bg-white/[0.03] px-3 text-sm font-medium text-zinc-300"
+                >
+                  Dismiss
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -390,7 +412,9 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
         ? "approve"
         : action === "reject"
           ? "reject"
-          : "redispatch";
+          : action === "dismissed"
+            ? "dismiss"
+            : "redispatch";
     const res = await fetchOrRedirectToLogin(
       `/api/sessions/${id}/${path}`,
       () => router.push("/login"),
