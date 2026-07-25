@@ -16,9 +16,9 @@ export async function GET() {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (e) {
-    return NextResponse.json(
-      { error: "inbox_query_failed", message: (e as Error).message },
-      { status: 500 },
-    );
+    // Log server-side only — the response body is generic so we don't leak
+    // DB/table internals (error messages, column names, etc.) to the client.
+    console.error("[api/inbox] query failed:", e);
+    return NextResponse.json({ error: "inbox_query_failed" }, { status: 500 });
   }
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type {
   DecisionAction,
   InboxGroups,
@@ -8,6 +9,20 @@ import type {
 } from "@/lib/inbox/types";
 
 const POLL_INTERVAL_MS = 12_000;
+
+// Machine-readable decision-error codes from the API (lib/inbox/decisions.ts,
+// app/api/sessions/[id]/*/route.ts) mapped to operator-friendly copy. Codes
+// not listed here fall back to the raw code (still better than nothing).
+const DECISION_ERROR_MESSAGE: Partial<Record<string, string>> = {
+  not_awaiting_review: "This session was already decided elsewhere.",
+  invalid_json: "That request could not be sent — please try again.",
+};
+
+function decisionErrorMessage(code: string | undefined, status: number): string {
+  if (code && DECISION_ERROR_MESSAGE[code]) return DECISION_ERROR_MESSAGE[code];
+  if (code) return code;
+  return `Request failed (${status})`;
+}
 
 function timeAgo(iso: string | null): string {
   if (!iso) return "—";
@@ -358,19 +373,46 @@ function Section({
 export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
   const [groups, setGroups] = useState(initialGroups);
   const inFlight = useRef(false);
+  const router = useRouter();
+
+  // middleware.ts 302-redirects to /login whenever the Supabase session is
+  // missing/expired. Plain `fetch()` follows redirects by default, so an
+  // expired-session response would otherwise come back as a 200 with the
+  // /login page's HTML body — `res.ok` true, but `.json()` throws on it (or
+  // parses garbage). `redirect: "manual"` stops the browser from following
+  // the redirect and instead hands back an opaque response (`type:
+  // "opaqueredirect"`, `status: 0`); treat that as "signed out" and bounce
+  // to /login instead of freezing the poll or surfacing a JSON-parse error.
+  // Shared by both the poll and the decision-write fetches below so the
+  // fix lives in one place.
+  async function fetchOrRedirectToLogin(
+    url: string,
+    init?: RequestInit,
+  ): Promise<Response | null> {
+    const res = await fetch(url, { ...init, redirect: "manual" });
+    if (res.type === "opaqueredirect" || res.status === 0) {
+      router.push("/login");
+      return null;
+    }
+    return res;
+  }
 
   useEffect(() => {
     const interval = setInterval(async () => {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        const res = await fetch("/api/inbox", { cache: "no-store" });
-        if (res.ok) {
+        const res = await fetchOrRedirectToLogin("/api/inbox", {
+          cache: "no-store",
+        });
+        if (res?.ok) {
           const next = (await res.json()) as InboxGroups;
           setGroups(next);
         }
         // Transient failures (network blip, 5xx) just keep the last good
         // render — no error UI for a background poll, next tick retries.
+        // A session-expired redirect is handled above (router.push), not
+        // treated as a transient failure.
       } catch {
         // ignore; retried on next tick
       } finally {
@@ -378,7 +420,8 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
       }
     }, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [router]);
 
   async function handleDecide(
     id: string,
@@ -391,19 +434,25 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
         : action === "reject"
           ? "reject"
           : "redispatch";
-    const res = await fetch(`/api/sessions/${id}/${path}`, {
+    const res = await fetchOrRedirectToLogin(`/api/sessions/${id}/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: action === "redispatch_with_feedback" ? JSON.stringify({ feedback }) : undefined,
     });
+    if (!res) {
+      // Session expired mid-action; redirect to /login already triggered.
+      throw new Error("Your session expired. Redirecting to sign in…");
+    }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error ?? `Request failed (${res.status})`);
+      throw new Error(decisionErrorMessage(body.error, res.status));
     }
     // Re-fetch immediately so the decided session moves groups without
     // waiting for the next poll tick.
-    const refreshed = await fetch("/api/inbox", { cache: "no-store" });
-    if (refreshed.ok) {
+    const refreshed = await fetchOrRedirectToLogin("/api/inbox", {
+      cache: "no-store",
+    });
+    if (refreshed?.ok) {
       setGroups((await refreshed.json()) as InboxGroups);
     }
   }
