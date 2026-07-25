@@ -3,7 +3,7 @@ import { getInboxGroups } from "@/lib/inbox/data";
 
 export const dynamic = "force-dynamic";
 
-// Authed via middleware.ts (not in its exclusion list). Polled by the
+// Authed via proxy.ts (not in its exclusion list). Polled by the
 // client-side Inbox view (app/inbox-view.tsx) every ~12s to refresh the
 // three groups without a realtime subscription, per the brief. Also backs
 // the initial server-render in app/page.tsx indirectly (that path calls

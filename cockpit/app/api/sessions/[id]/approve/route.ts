@@ -4,7 +4,7 @@ import { isValidSessionId } from "@/lib/inbox/session-id";
 
 export const dynamic = "force-dynamic";
 
-// Authed via middleware.ts (this route is not in its exclusion list — see
+// Authed via proxy.ts (this route is not in its exclusion list — see
 // the matcher there). No auth check needed here; defense-in-depth would
 // duplicate that gate, not add one, since there's no separate credential to
 // re-verify (unlike web/'s cookie-token scheme).

@@ -25,7 +25,7 @@ export async function createClient() {
           }
         } catch {
           // Called from a Server Component render — cookies() is read-only
-          // there. Safe to ignore because middleware.ts refreshes the
+          // there. Safe to ignore because proxy.ts refreshes the
           // session cookie on every navigation anyway.
         }
       },

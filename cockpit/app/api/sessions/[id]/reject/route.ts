@@ -4,7 +4,7 @@ import { isValidSessionId } from "@/lib/inbox/session-id";
 
 export const dynamic = "force-dynamic";
 
-// Authed via middleware.ts (see approve/route.ts's comment — same posture).
+// Authed via proxy.ts (see approve/route.ts's comment — same posture).
 //
 // Reject -> insert fleet_decisions(action='reject') -> flip session status
 // to 'rejected'. See lib/inbox/decisions.ts for the guard/ordering.

@@ -4,7 +4,7 @@ import { isValidSessionId } from "@/lib/inbox/session-id";
 
 export const dynamic = "force-dynamic";
 
-// Authed via middleware.ts (see approve/route.ts's comment — same posture).
+// Authed via proxy.ts (see approve/route.ts's comment — same posture).
 //
 // Dismiss -> insert fleet_decisions(action='dismissed') -> flip session
 // status to 'reviewed', same transition as approve. Distinct action so the
