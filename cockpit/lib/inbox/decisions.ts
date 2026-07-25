@@ -44,10 +44,14 @@ export async function applyDecision(
 
   const supabase = getAdminClient();
   const nextStatus = nextStatusForDecision(action);
+  // wave-1 bug fix: the schema-approval write left updated_at stale — every
+  // operator-driven status flip must bump it, same as any real mutation
+  // would (docs/V2_PLAN.md's M3 wave calls this out explicitly).
+  const now = new Date().toISOString();
 
   const { data: updated, error: updateError } = await supabase
     .from("fleet_sessions")
-    .update({ status: nextStatus })
+    .update({ status: nextStatus, updated_at: now })
     .eq("id", sessionId)
     .eq("status", "done")
     .select("id")
@@ -89,7 +93,7 @@ export async function applyDecision(
     // blindly (a retry would just 409 on the now-non-'done' session).
     await supabase
       .from("fleet_sessions")
-      .update({ status: "done" })
+      .update({ status: "done", updated_at: new Date().toISOString() })
       .eq("id", sessionId)
       .eq("status", nextStatus);
 
