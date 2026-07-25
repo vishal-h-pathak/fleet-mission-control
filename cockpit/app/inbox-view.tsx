@@ -7,6 +7,7 @@ import type {
   InboxGroups,
   InboxSession,
 } from "@/lib/inbox/types";
+import { fetchOrRedirectToLogin, STATUS_STYLE, timeAgo } from "@/lib/ui/session-format";
 
 const POLL_INTERVAL_MS = 12_000;
 
@@ -22,20 +23,6 @@ function decisionErrorMessage(code: string | undefined, status: number): string 
   if (code && DECISION_ERROR_MESSAGE[code]) return DECISION_ERROR_MESSAGE[code];
   if (code) return code;
   return `Request failed (${status})`;
-}
-
-function timeAgo(iso: string | null): string {
-  if (!iso) return "—";
-  const ms = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(ms)) return "—";
-  const s = Math.max(0, Math.round(ms / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  return `${d}d ago`;
 }
 
 // Picks the most relevant timestamp per row for the always-visible
@@ -61,16 +48,6 @@ function primaryTimestamp(session: InboxSession): string | null {
       return session.updated_at;
   }
 }
-
-const STATUS_STYLE: Record<InboxSession["status"], string> = {
-  planned: "bg-zinc-500/15 text-zinc-300 border-zinc-400/30",
-  running: "bg-sky-500/15 text-sky-300 border-sky-400/30",
-  waiting: "bg-amber-500/15 text-amber-300 border-amber-400/30",
-  done: "bg-indigo-500/15 text-indigo-300 border-indigo-400/30",
-  reviewed: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
-  merged: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
-  rejected: "bg-rose-500/15 text-rose-300 border-rose-400/30",
-};
 
 const DECISION_LABEL: Record<DecisionAction, string> = {
   approve_merge: "Approved",
@@ -375,36 +352,16 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
   const inFlight = useRef(false);
   const router = useRouter();
 
-  // middleware.ts 302-redirects to /login whenever the Supabase session is
-  // missing/expired. Plain `fetch()` follows redirects by default, so an
-  // expired-session response would otherwise come back as a 200 with the
-  // /login page's HTML body — `res.ok` true, but `.json()` throws on it (or
-  // parses garbage). `redirect: "manual"` stops the browser from following
-  // the redirect and instead hands back an opaque response (`type:
-  // "opaqueredirect"`, `status: 0`); treat that as "signed out" and bounce
-  // to /login instead of freezing the poll or surfacing a JSON-parse error.
-  // Shared by both the poll and the decision-write fetches below so the
-  // fix lives in one place.
-  async function fetchOrRedirectToLogin(
-    url: string,
-    init?: RequestInit,
-  ): Promise<Response | null> {
-    const res = await fetch(url, { ...init, redirect: "manual" });
-    if (res.type === "opaqueredirect" || res.status === 0) {
-      router.push("/login");
-      return null;
-    }
-    return res;
-  }
-
   useEffect(() => {
     const interval = setInterval(async () => {
       if (inFlight.current) return;
       inFlight.current = true;
       try {
-        const res = await fetchOrRedirectToLogin("/api/inbox", {
-          cache: "no-store",
-        });
+        const res = await fetchOrRedirectToLogin(
+          "/api/inbox",
+          () => router.push("/login"),
+          { cache: "no-store" },
+        );
         if (res?.ok) {
           const next = (await res.json()) as InboxGroups;
           setGroups(next);
@@ -434,11 +391,15 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
         : action === "reject"
           ? "reject"
           : "redispatch";
-    const res = await fetchOrRedirectToLogin(`/api/sessions/${id}/${path}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: action === "redispatch_with_feedback" ? JSON.stringify({ feedback }) : undefined,
-    });
+    const res = await fetchOrRedirectToLogin(
+      `/api/sessions/${id}/${path}`,
+      () => router.push("/login"),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: action === "redispatch_with_feedback" ? JSON.stringify({ feedback }) : undefined,
+      },
+    );
     if (!res) {
       // Session expired mid-action; redirect to /login already triggered.
       throw new Error("Your session expired. Redirecting to sign in…");
@@ -449,9 +410,11 @@ export function InboxView({ initialGroups }: { initialGroups: InboxGroups }) {
     }
     // Re-fetch immediately so the decided session moves groups without
     // waiting for the next poll tick.
-    const refreshed = await fetchOrRedirectToLogin("/api/inbox", {
-      cache: "no-store",
-    });
+    const refreshed = await fetchOrRedirectToLogin(
+      "/api/inbox",
+      () => router.push("/login"),
+      { cache: "no-store" },
+    );
     if (refreshed?.ok) {
       setGroups((await refreshed.json()) as InboxGroups);
     }
