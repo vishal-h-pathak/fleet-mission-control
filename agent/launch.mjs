@@ -410,7 +410,16 @@ async function ack(bus, sessionId, okFlag, error, log) {
   const body = { action: "ack", session_id: sessionId, ok: okFlag };
   if (error !== undefined) body.error = String(error).slice(0, 2000);
   const res = await bus(body);
-  if (res.status !== 200) log(`wave ack FAILED ${res.status}: ${trunc1(res.body)}`);
+  if (res.status !== 200) {
+    log(`wave ack FAILED ${res.status}: ${trunc1(res.body)}`);
+    return res;
+  }
+  // Echo the wave status the bus computed. This is the agent's own evidence that
+  // the ack landed (and, on the last session of a wave, that it completed) —
+  // without it, confirming a launch means going and reading the database.
+  let waveStatus = "?";
+  try { waveStatus = JSON.parse(res.body).wave_status ?? "?"; } catch { /* keep '?' */ }
+  log(`wave ack ok=${okFlag} session=${sessionId.slice(0, 8)} -> wave_status=${waveStatus}`);
   return res;
 }
 

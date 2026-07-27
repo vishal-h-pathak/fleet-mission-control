@@ -524,11 +524,16 @@ const item = (over = {}, waveOver = {}) => ({ wave: { ...WAVE, ...waveOver }, se
 
 await okAsync("valid session: claim -> launch -> success ack", async () => {
   const h = harness({ work: [item()] });
-  const s = await runWaveCycle({ bus: h.bus, cfg: CFG, launch: h.launch });
+  const logged = [];
+  const s = await runWaveCycle({ bus: h.bus, cfg: CFG, launch: h.launch, log: (m) => logged.push(m) });
   assert.equal(s.launched, 1);
   assert.deepEqual(h.calls.claim, [UUID]);
   assert.equal(h.calls.launched.length, 1);
   assert.deepEqual(h.calls.ack, [{ action: "ack", session_id: UUID, ok: true }]);
+  // The ack's wave_status is echoed, so a launch is confirmable from the agent's
+  // own output instead of requiring a database read.
+  assert.ok(logged.some((m) => m.includes("wave ack ok=true") && m.includes("wave_status=launching")),
+    `ack wave_status not logged; got: ${JSON.stringify(logged)}`);
 });
 
 await okAsync("REJECT DRILL: hostile payloads are error-acked and nothing is launched", async () => {

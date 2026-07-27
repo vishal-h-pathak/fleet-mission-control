@@ -157,13 +157,16 @@ async function handle(cmd) {
 // fail-soft by construction: runWaveCycle never throws, and this wrapper catches
 // anything that somehow escapes, because a bad wave must never take down the
 // agent's telemetry or command path.
+// Returns the cycle summary (or null if it was skipped/failed) — `--wave-once`
+// needs it to decide whether to linger for the detached /rc sidecar watcher.
 async function waveLoop() {
-  if (waveBusy) return;
+  if (waveBusy) return null;
   waveBusy = true;
   try {
-    await runWaveCycle({ bus: dispatchBus, cfg: LAUNCH_CFG, log });
+    return await runWaveCycle({ bus: dispatchBus, cfg: LAUNCH_CFG, log });
   } catch (err) {
     log(`wave loop error: ${err.message}`);
+    return null;
   } finally {
     waveBusy = false;
   }
