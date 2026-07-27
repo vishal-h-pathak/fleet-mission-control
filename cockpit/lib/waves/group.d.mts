@@ -24,6 +24,9 @@ export interface WaveSessionLike {
   wave_status?: string | null;
   wave_dispatched_at?: string | null;
   wave_notes?: string | null;
+  wave_confirmed_at?: string | null;
+  wave_confirmed_by?: string | null;
+  wave_launch_error?: string | null;
   updated_at: string;
 }
 
@@ -33,6 +36,9 @@ export interface WaveGroupLike<T extends WaveSessionLike = WaveSessionLike> {
   status: string | null;
   dispatched_at: string | null;
   notes: string | null;
+  confirmed_at: string | null;
+  confirmed_by: string | null;
+  launch_error: string | null;
   sessions: T[];
   statusCounts: Record<SessionStatusLike, number>;
 }

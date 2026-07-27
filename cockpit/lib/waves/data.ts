@@ -33,13 +33,32 @@ type RawWaveSessionRow = {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
+  claimed_at: string | null;
+  launched_at: string | null;
+  launch_error: string | null;
   wave_id: string | null;
   // Supabase-js embeds a to-one FK relationship as an object (or null); some
   // client versions type it as an array depending on inferred cardinality —
   // accept both shapes defensively, same as lib/inbox/data.ts's RawSessionRow.
   fleet_waves:
-    | { name: string; status: string; dispatched_at: string | null; notes: string | null }
-    | { name: string; status: string; dispatched_at: string | null; notes: string | null }[]
+    | {
+        name: string;
+        status: string;
+        dispatched_at: string | null;
+        notes: string | null;
+        confirmed_at: string | null;
+        confirmed_by: string | null;
+        launch_error: string | null;
+      }
+    | {
+        name: string;
+        status: string;
+        dispatched_at: string | null;
+        notes: string | null;
+        confirmed_at: string | null;
+        confirmed_by: string | null;
+        launch_error: string | null;
+      }[]
     | null;
   fleet_machines: { name: string } | { name: string }[] | null;
 };
@@ -69,9 +88,10 @@ export async function getWavesBoard(): Promise<ProjectGroup[]> {
     .select(
       `id, name, status, project, repo, branch, worktree, model, rc_url,
        pr_url, dispatched_at, started_at, ended_at, created_at, updated_at,
+       claimed_at, launched_at, launch_error,
        wave_id,
-       fleet_waves ( name, status, dispatched_at, notes ),
-       fleet_machines ( name )`,
+       fleet_waves ( name, status, dispatched_at, notes, confirmed_at, confirmed_by, launch_error ),
+       fleet_machines!fleet_sessions_machine_id_fkey ( name )`,
     )
     .order("updated_at", { ascending: false })
     .limit(RAW_FETCH_LIMIT)
@@ -99,11 +119,17 @@ export async function getWavesBoard(): Promise<ProjectGroup[]> {
       ended_at: r.ended_at,
       created_at: r.created_at,
       updated_at: r.updated_at,
+      claimed_at: r.claimed_at,
+      launched_at: r.launched_at,
+      launch_error: r.launch_error,
       wave_id: r.wave_id,
       wave_name: wave?.name ?? null,
       wave_status: wave?.status ?? null,
       wave_dispatched_at: wave?.dispatched_at ?? null,
       wave_notes: wave?.notes ?? null,
+      wave_confirmed_at: wave?.confirmed_at ?? null,
+      wave_confirmed_by: wave?.confirmed_by ?? null,
+      wave_launch_error: wave?.launch_error ?? null,
       machine_name: firstOf(r.fleet_machines)?.name ?? null,
     };
   });

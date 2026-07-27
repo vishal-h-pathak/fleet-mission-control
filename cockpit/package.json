@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "node lib/auth/allowlist.test.mjs && node lib/inbox/group.test.mjs && node lib/inbox/decisions-core.test.mjs && node lib/waves/group.test.mjs"
+    "test": "node lib/auth/allowlist.test.mjs && node lib/inbox/group.test.mjs && node lib/inbox/decisions-core.test.mjs && node lib/waves/group.test.mjs && node lib/compose/validate.test.mjs && node lib/compose/directive.test.mjs && node lib/compose/draft.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",
