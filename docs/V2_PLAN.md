@@ -100,6 +100,28 @@ scaffold against a settled schema (sonnet).
   set, `shell:false` — same regime as `agent/allowlist.mjs`; the cockpit confirm-preview
   is the human gate. Nothing auto-ships: the draft PR **is** the review gate, formalized.
 
+### M4 amendments from the agent-side build (wave 3, chunk B)
+
+- **Dispatch is direct-poll, not a `fleet_commands` verb.** `run-wave` never became a
+  queue verb: the agent polls the `dispatch` Edge Function directly (see SCHEMA_V2, "Wave
+  dispatch lifecycle"). The verb allowlist above is unchanged; the launch path has its own
+  gauntlet in `agent/allowlist.mjs` (`LAUNCH_REPOS` + `validateLaunchSession`), guarded by
+  the same `scripts/check-allowlist-parity.mjs`.
+- **The agent launches tmux locally; it does NOT call `cg runi`.** portfolio's `runi`
+  dispatches over ssh to the sentry box, hard-codes two repos, creates no worktree, takes no
+  `--model`, and is only on the unmerged branch `feat/dual-machine-watcher` — the `cockpit.sh`
+  on disk has no `runi` verb. The agent therefore spawns tmux directly (argv arrays,
+  `shell:false`) while replicating runi's three *contracts*: tmux name = registered session
+  name, pane log at `$FLEET_COCKPIT_LOG_DIR/<name>.log`, `/rc` sidecar at `<name>.rc`.
+  **Follow-up (deliberately out of this wave): converge the two on one launcher** once the
+  portfolio cockpit branch merges. No portfolio-repo change was made here.
+- **New machine prerequisite: `tmux`** (macOS cockpit: `brew install tmux`). Absence is
+  reject-acked with a clear error, never a silent no-op.
+- **Confirm-preview replaces the paste gate at the WAVE level; the session-level gate is the
+  directive's own STOP** ("Do not begin until the operator confirms"), steerable via `/rc`.
+  Launches therefore seed *and* submit by default; `FLEET_LAUNCH_NO_SUBMIT=1` restores
+  paste-without-submit per machine.
+
 ## 6. Review gates per session (unchanged conventions)
 
 Every session: worktree + own branch, validation-first, **commit → push → STOP** with

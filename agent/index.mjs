@@ -16,11 +16,19 @@
 //                                          # simulate a CLAIMED row carrying an approval. Without
 //                                          # it, a requiresApproval verb is shown then refused
 //                                          # ("unapproved") and never executed — proves the gate.
+//   node index.mjs --wave-once             # ONE wave-launch cycle (poll/claim/validate/launch/ack)
+//   node index.mjs --simulate-wave <file>  # offline reject drill: run a DOCTORED poll response
+//                     [--expect-all-rejected]
+//                                          # through the real gauntlet. Never spawns; prints the
+//                                          # accept/reject table + the argv each accept WOULD run.
+//                                          # --expect-all-rejected exits 1 if anything survives.
 
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { validateCommand, verbRequiresApproval, ALLOWED_VERBS } from "./allowlist.mjs";
+import { runWaveCycle, launchConfigFromEnv, describeLaunchArgv } from "./launch.mjs";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const FLEET_TOKEN = env("FLEET_TOKEN");
@@ -32,15 +40,41 @@ const EXEC_TIMEOUT_MS = Number(env("FLEET_EXEC_TIMEOUT_S", "600")) * 1000; // co
 const RESULT_MAXLEN = Number(env("FLEET_RESULT_MAXLEN", "16000"));        // truncate captured output
 const AGENT_VERSION = "0.1.0";
 
+// MCv2 M4 — wave-launch loop config (see agent/launch.mjs for the security model).
+const LAUNCH_CFG = launchConfigFromEnv(process.env);
+const RC_LINGER_S = 45; // --wave-once only: grace period for the /rc sidecar watcher
+
 const DRY_RUN = process.argv.includes("--dry-run");
 const ONCE = process.argv.includes("--once");
 const SIMULATE = argValue("--simulate"); // verb to run locally without the bus
+const WAVE_ONCE = process.argv.includes("--wave-once");
+const SIMULATE_WAVE = argValue("--simulate-wave"); // path to a doctored poll response
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
-let busy = false; // declared before loop() runs at startup (avoid temporal-dead-zone)
-if (SIMULATE) {
+let busy = false;     // declared before loop() runs at startup (avoid temporal-dead-zone)
+let waveBusy = false; // ditto, for the wave-launch loop
+if (SIMULATE_WAVE) {
+  runSimulateWave(SIMULATE_WAVE);
+} else if (SIMULATE) {
   // optional JSON args = token after the verb; --approved-at <iso> models an approved claim
   runSimulate(SIMULATE, simulateJsonArgs(), argValue("--approved-at"));
+} else if (WAVE_ONCE) {
+  if (!FLEET_TOKEN) {
+    console.error("FATAL: FLEET_TOKEN is required for the wave loop (or use --simulate-wave for offline tests).");
+    process.exit(1);
+  }
+  log(`wave-once — machine=${MACHINE_NAME} dispatch=${LAUNCH_CFG.dispatchUrl} repos=${LAUNCH_CFG.repoRoot} submit=${LAUNCH_CFG.submit}`);
+  // If anything launched, linger briefly so the detached /rc watcher can write the
+  // <name>.rc sidecar before we exit (in the long-running loop it has all the time
+  // it needs). The reporter's log scrape is the backstop either way.
+  waveLoop().then((summary) => {
+    if (summary && summary.launched > 0) {
+      log(`lingering ${RC_LINGER_S}s for the /rc sidecar watcher…`);
+      setTimeout(() => process.exit(0), RC_LINGER_S * 1000);
+    } else {
+      process.exit(0);
+    }
+  });
 } else {
   if (!FLEET_TOKEN) {
     console.error("FATAL: FLEET_TOKEN is required for the bus loop (or use --simulate for offline tests).");
@@ -48,7 +82,15 @@ if (SIMULATE) {
   }
   log(`agent starting — machine=${MACHINE_NAME} poll=${POLL_S}s verbs=[${ALLOWED_VERBS.join(", ")}] cockpit=${COCKPIT_SH}`);
   loop();
-  if (!ONCE) setInterval(loop, POLL_S * 1000);
+  // --once is a single COMMAND cycle that exits the process when it finishes, so the
+  // wave loop deliberately does not start under it — a mid-flight launch must never
+  // be cut in half by that exit. Use --wave-once for a one-shot wave cycle.
+  if (!ONCE) {
+    log(`wave-launch loop — dispatch=${LAUNCH_CFG.dispatchUrl} poll=${LAUNCH_CFG.wavePollS}s repos=${LAUNCH_CFG.repoRoot} cap=${LAUNCH_CFG.concurrency} submit=${LAUNCH_CFG.submit}`);
+    waveLoop();
+    setInterval(loop, POLL_S * 1000);
+    setInterval(waveLoop, LAUNCH_CFG.wavePollS * 1000);
+  }
 }
 
 // ── Poll loop: claim → running → exec → result ────────────────────────────────
@@ -108,6 +150,98 @@ async function handle(cmd) {
   const status = out.exit_code === 0 ? "done" : "error";
   await report(id, status, out.result, out.exit_code);
   log(`done ${verb}#${short(id)} status=${status} exit=${out.exit_code}`);
+}
+
+// ── Wave-launch loop (MCv2 M4): poll → claim → validate → launch → ack ────────
+// Runs BESIDE the command loop, on its own interval and its own busy flag. It is
+// fail-soft by construction: runWaveCycle never throws, and this wrapper catches
+// anything that somehow escapes, because a bad wave must never take down the
+// agent's telemetry or command path.
+// Returns the cycle summary (or null if it was skipped/failed) — `--wave-once`
+// needs it to decide whether to linger for the detached /rc sidecar watcher.
+async function waveLoop() {
+  if (waveBusy) return null;
+  waveBusy = true;
+  try {
+    return await runWaveCycle({ bus: dispatchBus, cfg: LAUNCH_CFG, log });
+  } catch (err) {
+    log(`wave loop error: ${err.message}`);
+    return null;
+  } finally {
+    waveBusy = false;
+  }
+}
+
+// The dispatch Edge Function — a SEPARATE function from `commands` by design
+// (execution surface vs telemetry sink). Same per-machine FLEET_TOKEN; the machine
+// identity comes from the token, never from the request body.
+async function dispatchBus(body) {
+  return postJSON(LAUNCH_CFG.dispatchUrl, body, FLEET_TOKEN);
+}
+
+// ── --simulate-wave: the offline reject drill (no bus, no spawn) ──────────────
+// Feeds a DOCTORED poll response through the real claim→validate path with a spy
+// in place of the launcher, so hostile payloads (non-allowlisted repo, '../'
+// prompt_ref, flag-injection branch/name) are proven to be rejected with error
+// acks and nothing spawned. Accepted rows print the exact argv they WOULD run.
+function runSimulateWave(file) {
+  let poll;
+  try {
+    poll = fs.readFileSync(file, "utf-8");
+    JSON.parse(poll);
+  } catch (e) {
+    console.error(`bad --simulate-wave file '${file}': ${e.message}`);
+    process.exit(2);
+  }
+  const acks = [];
+  const wouldLaunch = [];
+  const bus = async (body) => {
+    if (body.action === "poll") return { status: 200, body: poll };
+    if (body.action === "claim") {
+      // Model a WON claim so every row reaches the gauntlet — the point of the
+      // drill is what the agent does with hostile input, not the race.
+      return { status: 200, body: JSON.stringify({ ok: true, won: true, session_id: body.session_id }) };
+    }
+    if (body.action === "ack") {
+      acks.push(body);
+      return { status: 200, body: JSON.stringify({ ok: true, wave_status: "launching" }) };
+    }
+    return { status: 400, body: '{"error":"unknown_action"}' };
+  };
+  const launch = async (plan) => {
+    wouldLaunch.push(plan);
+    return { ok: true, detail: { tmux: plan.name, simulated: true } };
+  };
+
+  runWaveCycle({ bus, cfg: LAUNCH_CFG, log, launch }).then((summary) => {
+    console.log(`\n── simulate-wave: ${file} ─────────────────────────────────────`);
+    for (const r of summary.results) {
+      const verdict = r.outcome === "launched" ? "ACCEPT" : "REJECT";
+      console.log(`  ${verdict}  ${r.name}  ${r.reason ? `— ${r.reason}` : ""}`);
+    }
+    console.log(`\n  acks: ${acks.length} (${acks.filter((a) => a.ok === false).length} error-acks)`);
+    for (const a of acks) console.log(`    ack ok=${a.ok} ${a.error ? `error="${a.error}"` : ""}`);
+    if (wouldLaunch.length) {
+      console.log(`\n  WOULD LAUNCH ${wouldLaunch.length} session(s) — exact argv (nothing was spawned):`);
+      for (const plan of wouldLaunch) {
+        console.log(`    ${plan.name}:`);
+        for (const s of describeLaunchArgv(plan, LAUNCH_CFG)) {
+          console.log(`      ${s.step.padEnd(13)} ${s.tool} ${JSON.stringify(s.argv)}`);
+        }
+      }
+    } else {
+      console.log("\n  NOTHING would be spawned.");
+    }
+    console.log(
+      `\n  polled=${summary.polled} claimed=${summary.claimed} launched(simulated)=${summary.launched} ` +
+      `rejected=${summary.rejected} skipped=${summary.skipped}`
+    );
+    if (process.argv.includes("--expect-all-rejected") && wouldLaunch.length > 0) {
+      console.error(`\nFAIL: --expect-all-rejected, but ${wouldLaunch.length} session(s) survived the gauntlet.`);
+      process.exit(1);
+    }
+    process.exit(0);
+  });
 }
 
 // ── Executor: cockpit.sh via spawnSync, shell:false, NEVER a shell string ──────
