@@ -8,9 +8,16 @@ import type { SessionStatus } from "@/lib/inbox/types";
 
 export type { SessionStatus };
 
-/** `fleet_waves.status` enum, per docs/SCHEMA_V2.md. */
+/**
+ * `fleet_waves.status` enum, per docs/SCHEMA_V2.md's "Wave dispatch lifecycle
+ * (M4)". `confirmed`/`launching` are new in M4 (Compose is their first
+ * writer/reader in the cockpit): draft -> confirmed -> launching ->
+ * dispatched -> reviewing -> done | abandoned.
+ */
 export type WaveStatus =
   | "draft"
+  | "confirmed"
+  | "launching"
   | "dispatched"
   | "reviewing"
   | "done"
@@ -39,12 +46,24 @@ export interface WaveSession {
   ended_at: string | null;
   created_at: string;
   updated_at: string;
+  /** M4 dispatch: non-null once an agent has taken the advisory-lock claim. */
+  claimed_at: string | null;
+  /** M4 dispatch: preserve-on-null; set on a successful launch ack. */
+  launched_at: string | null;
+  /** M4 dispatch: set on a failed launch ack; terminal for the launch phase. */
+  launch_error: string | null;
   /** null = ungrouped (this session isn't part of any registered wave). */
   wave_id: string | null;
   wave_name: string | null;
   wave_status: WaveStatus | string | null;
   wave_dispatched_at: string | null;
   wave_notes: string | null;
+  /** M4 dispatch: when the operator confirmed the parent wave. */
+  wave_confirmed_at: string | null;
+  /** M4 dispatch: operator email that confirmed the parent wave. */
+  wave_confirmed_by: string | null;
+  /** M4 dispatch: "<n>/<total> sessions failed to launch", if any did. */
+  wave_launch_error: string | null;
   machine_name: string | null;
 }
 
@@ -56,6 +75,12 @@ export interface WaveGroup {
   status: WaveStatus | string | null;
   dispatched_at: string | null;
   notes: string | null;
+  /** M4 dispatch: null unless status has reached `confirmed`. */
+  confirmed_at: string | null;
+  /** M4 dispatch: operator email that confirmed this wave. */
+  confirmed_by: string | null;
+  /** M4 dispatch: "<n>/<total> sessions failed to launch", if any did. */
+  launch_error: string | null;
   sessions: WaveSession[];
   /** Count of sessions per status; all seven keys always present (zero-filled). */
   statusCounts: Record<SessionStatus, number>;

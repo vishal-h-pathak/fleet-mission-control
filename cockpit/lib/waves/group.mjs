@@ -73,6 +73,9 @@ export function groupSessionsByProjectAndWave(sessions) {
         status: s.wave_id ? (s.wave_status ?? null) : null,
         dispatched_at: s.wave_id ? (s.wave_dispatched_at ?? null) : null,
         notes: s.wave_id ? (s.wave_notes ?? null) : null,
+        confirmed_at: s.wave_id ? (s.wave_confirmed_at ?? null) : null,
+        confirmed_by: s.wave_id ? (s.wave_confirmed_by ?? null) : null,
+        launch_error: s.wave_id ? (s.wave_launch_error ?? null) : null,
         sessions: [],
         statusCounts: emptyStatusCounts(),
       });

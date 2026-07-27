@@ -100,6 +100,52 @@ scaffold against a settled schema (sonnet).
   set, `shell:false` — same regime as `agent/allowlist.mjs`; the cockpit confirm-preview
   is the human gate. Nothing auto-ships: the draft PR **is** the review gate, formalized.
 
+## 5a. M4 Compose — cockpit implementation notes (2026-07-26)
+
+`cockpit/app/compose` (+ `lib/compose/`, `lib/github/prompts.ts`, `lib/projects/data.ts`)
+implements the wizard described in `ops/prompts/PROMPT_mcv2_compose.md`. A few points the
+contract left to the building session's judgment, recorded here for the planner/reviewer:
+
+- **`registered_by` stays null** on Compose-created waves. That column audits *which
+  machine POSTed the register block* — Compose is an authed operator UI action, no machine
+  is involved until the `dispatch` Edge Function later claims a session.
+- **`dispatched_at` (wave and session) stays null** at draft/confirm time. The ingest
+  `register` path stamps it at registration because for that (legacy) path, registering
+  *is* dispatching; for the M4 execution surface, dispatch is a separate, later event. The
+  `dispatch` Edge Function itself never stamps `fleet_waves.dispatched_at` either (checked
+  against `supabase/functions/dispatch/index.ts` — it only ever writes
+  `claimed_at`/`claimed_by`/`launched_at`/`launch_error`/`status`), so this field currently
+  has no writer post-M4 wave 3 for the confirmed→dispatched path; flagged as a possible
+  follow-up (would need the `ack` action to stamp it once every session has an outcome).
+- **`worktree` stays null** on Compose-created sessions — per
+  `ops/prompts/PROMPT_mcv2_agent_runwave.md` §"Validation gauntlet" item 4, the worktree
+  path is computed by the agent and any registered value is ignored for execution, so
+  recording one here would be misleading rather than merely unused.
+- **The directive template** shown on the preview screen and stored (record-only) on
+  `fleet_sessions.directive` is copied verbatim from
+  `ops/prompts/PROMPT_mcv2_agent_runwave.md`'s "Launch" section — the only place the exact
+  template text exists today (agent-runwave hasn't merged yet). If that chunk lands with a
+  different final template, `cockpit/lib/compose/directive.mjs` needs a matching update.
+- **Abandon is scoped to `draft`/`confirmed`** waves only, per the compose prompt's
+  guardrail bullet — abandoning a `launching`/`dispatched` wave mid-flight (the full
+  "any → abandoned" kill switch in `docs/SCHEMA_V2.md`) is left to the Waves board surface.
+- **Session/branch validation** in `lib/compose/validate.mjs` reuses the exact `NAME_RE`
+  ingest already enforces (`supabase/functions/ingest/session-logic.mjs`) and the exact
+  `prompt_ref` shape the future agent will re-validate
+  (`^ops/prompts/PROMPT_[A-Za-z0-9_.-]{1,120}\.md$`), so a Compose-built row can never carry
+  a shape either side would itself reject.
+- **Bug found + fixed during live validation:** the M4 dispatch migration
+  (`20260726090000_fleet_mcv2_wave_dispatch.sql`) added `fleet_sessions.claimed_by`, a
+  second FK to `fleet_machines` alongside the existing `machine_id`. That made
+  `cockpit/lib/waves/data.ts`'s embedded `fleet_machines ( name )` select ambiguous to
+  PostgREST ("more than one relationship was found"), breaking `/waves` with a 500 —
+  latent since wave 2, only surfaced once the M4 migration was live. Fixed by
+  disambiguating with the explicit FK-name hint:
+  `fleet_machines!fleet_sessions_machine_id_fkey ( name )`. Verified live against the
+  bus (`curl` with the hint resolves; `/waves` renders after the fix, including real
+  `confirmed_at`/`confirmed_by`/`launch_error`/`claimed_at` data from a sibling
+  session's own live-fire drill wave).
+
 ## 6. Review gates per session (unchanged conventions)
 
 Every session: worktree + own branch, validation-first, **commit → push → STOP** with

@@ -14,6 +14,8 @@ const POLL_INTERVAL_MS = 12_000;
 
 const WAVE_STATUS_STYLE: Record<string, string> = {
   draft: "bg-zinc-500/15 text-zinc-300 border-zinc-400/30",
+  confirmed: "bg-violet-500/15 text-violet-300 border-violet-400/30",
+  launching: "bg-amber-500/15 text-amber-300 border-amber-400/30",
   dispatched: "bg-sky-500/15 text-sky-300 border-sky-400/30",
   reviewing: "bg-amber-500/15 text-amber-300 border-amber-400/30",
   done: "bg-emerald-500/15 text-emerald-300 border-emerald-400/30",
@@ -95,6 +97,17 @@ function SessionRow({ session }: { session: WaveSession }) {
             {session.branch ?? "—"} · {session.machine_name ?? "—"} ·{" "}
             {session.model ?? "—"} · {timeAgo(primaryTimestamp(session))}
           </p>
+          {/* M4 dispatch: launch bookkeeping, only present once an agent has
+              touched this session (claimed_at is the advisory-lock stamp). */}
+          {session.claimed_at && (
+            <p className="mt-1 truncate text-xs text-zinc-500">
+              claimed {timeAgo(session.claimed_at)}
+              {session.launched_at && ` · launched ${timeAgo(session.launched_at)}`}
+              {session.launch_error && (
+                <span className="text-rose-400"> · launch failed: {session.launch_error}</span>
+              )}
+            </p>
+          )}
         </div>
         <div className="flex shrink-0 gap-3 text-xs">
           {session.rc_url && (
@@ -151,6 +164,15 @@ function WaveSection({ wave }: { wave: ProjectGroup["waves"][number] }) {
         )}
       </div>
       {wave.notes && <p className="mt-1 text-xs text-zinc-500">{wave.notes}</p>}
+      {wave.confirmed_at && (
+        <p className="mt-1 text-xs text-zinc-500">
+          confirmed {timeAgo(wave.confirmed_at)}
+          {wave.confirmed_by && ` by ${wave.confirmed_by}`}
+        </p>
+      )}
+      {wave.launch_error && (
+        <p className="mt-1 text-xs text-rose-400">{wave.launch_error}</p>
+      )}
       {counts.length > 0 && (
         <p className="mt-1 text-xs text-zinc-500">
           {counts.map(([s, n]) => `${n} ${s}`).join(" · ")}
