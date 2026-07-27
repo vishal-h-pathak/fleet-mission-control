@@ -4,6 +4,7 @@
 
 import assert from "node:assert/strict";
 import { composeDirective } from "./directive.mjs";
+import { composeDirective as composeDirectiveAgent } from "../../../agent/allowlist.mjs";
 
 let passed = 0;
 function ok(name, fn) {
@@ -40,6 +41,14 @@ ok("bus/free text never enters the template beyond the two fields", () => {
   // any other input.
   const text = composeDirective({ promptRef: "X", branch: "Y" });
   assert.equal(text.startsWith("Read ./ops/prompts/PROMPT_fleet_conventions.md then ./X and implement it on this branch (Y)."), true);
+});
+
+ok("byte-identical to the agent's composeDirective — the agent's is what executes; this preview is a copy", () => {
+  const fields = { promptRef: "ops/prompts/PROMPT_parity_check.md", branch: "feat/parity-check" };
+  const preview = composeDirective(fields);
+  const executed = composeDirectiveAgent(fields);
+  assert.equal(executed.ok, true);
+  assert.equal(preview, executed.directive);
 });
 
 console.log(`\n${passed} passed`);

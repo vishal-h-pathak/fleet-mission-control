@@ -185,16 +185,19 @@ function collectJobs() {
     return { jobs, currentSessions };
   }
 
+  const paneCommands = collectPaneCommands();
+
   for (const line of tmuxOut.split("\n")) {
     const match = line.match(/^([^:]+):/);
     if (!match) continue;
     const name = match[1].trim();
     currentSessions.add(name);
 
+    const runningClaude = paneCommands.get(name)?.has("claude") ?? false;
     const job = {
       name,
       project: inferProject(name),
-      kind: inferKind(name),
+      kind: inferKind(name, runningClaude),
       status: "running",
       progress: {},
     };
@@ -231,11 +234,38 @@ function collectJobs() {
   return { jobs, currentSessions };
 }
 
-function inferKind(name) {
+// `runningClaude` is a live signal (the tmux pane's current foreground command
+// is `claude`) available only while the session is still running — see
+// collectPaneCommands(). It takes priority because a wave-launched session's
+// name is operator-chosen (NAME_RE, no required prefix) and won't match the
+// `claude-*` convention. The name check remains as a fallback for callers that
+// have no live pane to inspect (the finished/crash backstop, --import-log).
+function inferKind(name, runningClaude) {
   if (name === "nav") return "nav";
-  if (/^claude-\d{6}$/.test(name) || /^claude-/.test(name)) return "claude-session";
+  if (runningClaude || /^claude-\d{6}$/.test(name) || /^claude-/.test(name)) return "claude-session";
   if (name === "evolution" || name === "evo") return "evolution";
   return "other";
+}
+
+// One batched `tmux list-panes -a` covers every session's panes, so
+// classifying N sessions costs one process spawn, not N. Returns
+// session name -> Set of that session's panes' current foreground commands.
+function collectPaneCommands() {
+  const map = new Map();
+  let out = "";
+  try {
+    out = run("tmux list-panes -a -F '#{session_name} #{pane_current_command}'");
+  } catch {
+    return map; // tmux not running, or no panes
+  }
+  for (const line of out.split("\n")) {
+    const match = line.match(/^(\S+) (\S+)$/);
+    if (!match) continue;
+    const [, sess, cmd] = match;
+    if (!map.has(sess)) map.set(sess, new Set());
+    map.get(sess).add(cmd);
+  }
+  return map;
 }
 
 function inferProject(name) {
