@@ -62,6 +62,22 @@ export const SAFE_LOG_PATH_RE = /^[A-Za-z0-9._\/-]+$/;
 // eslint-disable-next-line no-control-regex
 const ANSI_RE = /\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
 
+// Compare text against what a TUI actually renders. The claude input box SOFT-WRAPS
+// a long directive across several lines and indents the continuations, and those are
+// real newlines in the pane — `capture-pane -J` only rejoins lines tmux itself
+// wrapped, so it does not put them back together. Comparing raw text therefore fails
+// on any directive long enough to wrap (which is all of them). Strip ANSI, collapse
+// every whitespace run to one space, and the seed-confirmation becomes wrap-agnostic.
+export function normalizePane(s) {
+  return String(s || "").replace(ANSI_RE, "").replace(/\s+/g, " ").trim();
+}
+
+// How much of the directive's tail must be visible to call the seed confirmed. The
+// TAIL specifically (not any substring): it is the proof that the WHOLE directive
+// landed, so a truncated or dropped paste is reported instead of blindly submitted.
+export const SEED_MARK_LEN = 32;
+export const seedMark = (directive) => normalizePane(directive).slice(-SEED_MARK_LEN);
+
 // ── Config ───────────────────────────────────────────────────────────────────
 export function launchConfigFromEnv(e = process.env) {
   return Object.freeze({
@@ -107,6 +123,20 @@ export function launchPaths(plan, cfg) {
   return { logPath, rcPath };
 }
 
+// tmux targets. The leading `=` forces an EXACT session-name match instead of
+// tmux's default prefix/fnmatch resolution — important because the name comes
+// from the bus: without it, `w3` could resolve to a session called `w3-drill`.
+//
+// The two forms are NOT interchangeable, and getting this wrong fails silently:
+//   - session-target commands (has-session, kill-session) take `=<name>`
+//   - pane-target commands (capture-pane, send-keys, pipe-pane) take `=<name>:`
+//     — a bare `=<name>` is rejected with "can't find pane", which for pipe-pane
+//     means no log is ever written and for capture-pane means the readiness probe
+//     reads an empty string forever. Verified against tmux 3.7b; `=<name>:` is
+//     confirmed exact (`=prob:` does not match a session named `probe`).
+export const sessionTarget = (name) => `=${name}`;
+export const paneTarget = (name) => `=${name}:`;
+
 // THE ordered sequence of external invocations a launch performs — the single
 // source of truth for both the executor below and the tests/simulator. launchSession
 // looks its commands up here by step name rather than hand-building argv a second
@@ -121,13 +151,14 @@ export function describeLaunchArgv(plan, cfg, { worktreeMode = "new", bins = {} 
   const tmux = bins.tmux || "tmux";
   const claude = bins.claude || cfg.claudeBin;
   const { logPath } = launchPaths(plan, cfg);
-  const t = `=${plan.name}`; // '=' is tmux's exact-match target syntax
+  const st = sessionTarget(plan.name); // has-session / kill-session
+  const t = paneTarget(plan.name);     // capture-pane / send-keys / pipe-pane
   const reuse = worktreeMode === "reuse";
   const steps = [
     { step: "repo-check",   tool: git,  argv: ["-C", plan.repoDir, "rev-parse", "--git-dir"] },
     { step: "fetch",        tool: git,  argv: ["-C", plan.repoDir, "fetch", "--quiet", "origin"] },
     { step: "prompt-check", tool: git,  argv: ["-C", plan.repoDir, "cat-file", "-e", "--", `origin/main:${plan.promptRef}`] },
-    { step: "tmux-free",    tool: tmux, argv: ["has-session", "-t", t] },
+    { step: "tmux-free",    tool: tmux, argv: ["has-session", "-t", st] },
     ...(reuse
       ? [{ step: "worktree-head", tool: git, argv: ["-C", plan.worktreePath, "rev-parse", "--abbrev-ref", "HEAD"] }]
       : [
@@ -200,7 +231,8 @@ export async function launchSession(plan, cfg, log = () => {}) {
   }
 
   // Never clobber a live session that already owns this name.
-  const target = `=${plan.name}`;
+  const sTarget = sessionTarget(plan.name); // has-session / kill-session
+  const pTarget = paneTarget(plan.name);    // capture-pane
   if (run(probe["tmux-free"], TIMEOUTS.tmuxMs).code === 0) {
     return fail(`tmux session '${plan.name}' already exists — refusing to clobber it`);
   }
@@ -232,7 +264,7 @@ export async function launchSession(plan, cfg, log = () => {}) {
   // Everything past this point cleans up its own tmux session on failure, so a
   // launch_error never leaves a half-seeded TUI sitting on the machine.
   const abort = (reason) => {
-    sh(bins.tmux, ["kill-session", "-t", target], TIMEOUTS.tmuxMs);
+    sh(bins.tmux, ["kill-session", "-t", sTarget], TIMEOUTS.tmuxMs);
     return fail(reason);
   };
 
@@ -242,18 +274,18 @@ export async function launchSession(plan, cfg, log = () => {}) {
 
   // Wait for the TUI to be mounted AND stable (two identical frames) before
   // typing — keystrokes sent mid-render are dropped.
-  const ready = await waitForReady(bins.tmux, target);
+  const ready = await waitForReady(bins.tmux, plan.name);
   if (!ready) return abort("the claude TUI never became ready in the launch window");
 
   // Seed once, literally, then CONFIRM the whole directive landed in the input box
   // before pressing Enter. A partial seed is reported, never blindly submitted.
   const seeded = run(S.seed, TIMEOUTS.tmuxMs);
   if (seeded.code !== 0) return abort(`tmux send-keys (seed) failed: ${firstLine(seeded.stderr) || `exit ${seeded.code}`}`);
-  const mark = plan.directive.slice(-24);
+  const mark = seedMark(plan.directive);
   let landed = false;
   for (let i = 0; i < TIMEOUTS.seedPolls; i++) {
     await sleep(500);
-    if (capturePane(bins.tmux, target).includes(mark)) { landed = true; break; }
+    if (normalizePane(capturePane(bins.tmux, plan.name)).includes(mark)) { landed = true; break; }
   }
   if (!landed) return abort("directive seed was not confirmed in the input box — not submitted");
 
@@ -264,7 +296,7 @@ export async function launchSession(plan, cfg, log = () => {}) {
 
   // /rc sidecar watcher — detached and fail-soft. The reporter also scrapes the
   // pane log, so this is belt-and-braces for the deterministic path.
-  watchRcUrl(bins.tmux, target, logPath, rcPath, log);
+  watchRcUrl(bins.tmux, plan.name, logPath, rcPath, log);
 
   return {
     ok: true,
@@ -383,22 +415,28 @@ async function ack(bus, sessionId, okFlag, error, log) {
 }
 
 // ── tmux helpers ─────────────────────────────────────────────────────────────
-function capturePane(tmux, target) {
-  const r = sh(tmux, ["capture-pane", "-pJ", "-t", target], TIMEOUTS.tmuxMs);
+// These take the session NAME (not a pre-built target) and derive the correct
+// form per command — mixing the two is the failure mode paneTarget documents.
+function capturePane(tmux, name) {
+  const r = sh(tmux, ["capture-pane", "-pJ", "-t", paneTarget(name)], TIMEOUTS.tmuxMs);
   return r.code === 0 ? r.stdout : "";
 }
 
-async function waitForReady(tmux, target) {
+function sessionAlive(tmux, name) {
+  return sh(tmux, ["has-session", "-t", sessionTarget(name)], TIMEOUTS.tmuxMs).code === 0;
+}
+
+async function waitForReady(tmux, name) {
   let prev = "";
   let stable = 0;
   for (let i = 0; i < TIMEOUTS.readyPolls; i++) {
-    const pane = capturePane(tmux, target);
+    const pane = capturePane(tmux, name);
     if (/for shortcuts|bypass permission|esc to interrupt/i.test(pane)) {
       stable = pane === prev ? stable + 1 : 0;
       if (stable >= 2) return true;
     }
     prev = pane;
-    if (sh(tmux, ["has-session", "-t", target], TIMEOUTS.tmuxMs).code !== 0) return false;
+    if (!sessionAlive(tmux, name)) return false;
     await sleep(500);
   }
   return false;
@@ -406,20 +444,20 @@ async function waitForReady(tmux, target) {
 
 // Detached, unref'd, fail-soft: writes $LOG_DIR/<name>.rc (first line = URL), the
 // exact file the reporter reads and routes to private fleet_job_links.rc_url.
-function watchRcUrl(tmux, target, logPath, rcPath, log) {
+function watchRcUrl(tmux, name, logPath, rcPath, log) {
   let n = 0;
   const tick = () => {
     n++;
     try {
       const fromLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8").replace(ANSI_RE, "") : "";
-      const fromPane = capturePane(tmux, target).replace(ANSI_RE, "");
+      const fromPane = capturePane(tmux, name).replace(ANSI_RE, "");
       const url = extractRcUrl(`${fromLog}\n${fromPane}`);
       if (url) {
         fs.writeFileSync(rcPath, `${url}\n`, "utf-8");
         log(`/rc captured -> ${rcPath}`);
         return;
       }
-      if (sh(tmux, ["has-session", "-t", target], TIMEOUTS.tmuxMs).code !== 0) return;
+      if (!sessionAlive(tmux, name)) return;
     } catch { /* fail-soft: the reporter still scrapes the log */ }
     if (n < TIMEOUTS.rcPolls) setTimeout(tick, 1000).unref?.();
   };

@@ -140,6 +140,20 @@ Three contracts are replicated deliberately (see "runi-local convergence" below)
 **tmux is a prerequisite** (`brew install tmux` on the Mac). It is checked in the gauntlet: with
 no tmux the session is reject-acked with a clear error and nothing else happens.
 
+> **Two tmux target forms, and they are not interchangeable.** `has-session`/`kill-session` take
+> a *session* target (`=<name>`); `capture-pane`/`send-keys`/`pipe-pane` take a *pane* target
+> (`=<name>:`). The leading `=` forces exact-name matching — without it `w3` would resolve to a
+> session called `w3-drill`. Using the session form on a pane command fails *silently* in a way
+> that looks like something else entirely (no pane log is written; the readiness probe reads an
+> empty string and the launch dies 40s later claiming the TUI never started). Both forms are
+> pinned by `agent/test-launch.mjs` and executed for real against tmux by `agent/test-tmux-live.mjs`.
+>
+> **Seed confirmation is whitespace-normalized.** The input box soft-wraps and indents a long
+> directive, and `capture-pane -J` does not rejoin those lines, so the raw tail never matches a
+> correctly-pasted directive. Both sides are ANSI-stripped and whitespace-collapsed
+> (`normalizePane`) before comparing; the check still requires the directive's *tail*, so a
+> truncated paste is reported rather than submitted.
+
 ### Seed-and-submit vs paste-unsubmitted
 
 The default is **seed AND submit**. The layering is deliberate: the *wave-level* human gate is
@@ -186,7 +200,8 @@ node agent/index.mjs                  # both loops: commands + wave-launch
 node agent/index.mjs --once           # one claim cycle, then exit
 node agent/index.mjs --wave-once      # ONE wave cycle (poll/claim/validate/launch/ack), then exit
 node agent/test.mjs                   # offline security self-test (exit 0 = all passed)
-node agent/test-launch.mjs            # offline wave-launch self-test (109 checks)
+node agent/test-launch.mjs            # offline wave-launch self-test (113 checks)
+node agent/test-tmux-live.mjs         # LIVE tmux contract test (needs tmux; no claude, no bus)
 node scripts/check-allowlist-parity.mjs   # verb parity + launch-gauntlet drift guard
 
 # Offline wave drills (no bus, nothing spawned):

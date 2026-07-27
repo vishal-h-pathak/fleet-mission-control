@@ -25,6 +25,10 @@ import {
   describeLaunchArgv,
   worktreeArgv,
   launchConfigFromEnv,
+  sessionTarget,
+  paneTarget,
+  normalizePane,
+  seedMark,
   SAFE_LOG_PATH_RE,
 } from "./launch.mjs";
 
@@ -384,9 +388,10 @@ ok("launch argv sequence is exact (new-branch mode)", () => {
   assert.deepEqual(by["new-session"].argv, ["new-session", "-d", "-s", "mcv2-w3-selftest", "-c",
     "/repos/fleet-wt/mcv2-w3-selftest", "/bin/claude", "--model", "sonnet", "--rc",
     "--permission-mode", "bypassPermissions"]);
-  assert.deepEqual(by["pipe-pane"].argv, ["pipe-pane", "-t", "=mcv2-w3-selftest", "-o", "cat >> '/logs/mcv2-w3-selftest.log'"]);
-  assert.deepEqual(by.seed.argv, ["send-keys", "-t", "=mcv2-w3-selftest", "-l", plan.directive]);
-  assert.deepEqual(by.submit.argv, ["send-keys", "-t", "=mcv2-w3-selftest", "Enter"]);
+  // pane-target commands carry the trailing colon; has-session (above) does not.
+  assert.deepEqual(by["pipe-pane"].argv, ["pipe-pane", "-t", "=mcv2-w3-selftest:", "-o", "cat >> '/logs/mcv2-w3-selftest.log'"]);
+  assert.deepEqual(by.seed.argv, ["send-keys", "-t", "=mcv2-w3-selftest:", "-l", plan.directive]);
+  assert.deepEqual(by.submit.argv, ["send-keys", "-t", "=mcv2-w3-selftest:", "Enter"]);
   // The resolved absolute binaries are used, never a bare name from bus data.
   assert.equal(by.worktree.tool, "/usr/bin/git");
   assert.equal(by["new-session"].tool, "/opt/tmux");
@@ -433,6 +438,60 @@ ok("no argv element is an unexpected flag-looking token derived from bus data", 
     }
   }
 });
+// REGRESSION (live drill, 2026-07-27): `=<name>` is a valid SESSION target but an
+// invalid PANE target — tmux answers "can't find pane". Using it for pipe-pane and
+// capture-pane failed *silently*: no log was ever written and the readiness probe
+// read "" forever, so the launch died 40s later with a misleading "TUI never became
+// ready". Pin the two forms per command so the mix-up cannot come back.
+ok("tmux targets: session commands take '=name', pane commands take '=name:'", () => {
+  assert.equal(sessionTarget("w3-drill"), "=w3-drill");
+  assert.equal(paneTarget("w3-drill"), "=w3-drill:");
+  const plan = accept({ name: "w3-drill" });
+  const byStep = Object.fromEntries(describeLaunchArgv(plan, CFG).map((s) => [s.step, s.argv]));
+  const targetOf = (argv) => argv[argv.indexOf("-t") + 1];
+  // session-target commands
+  assert.equal(targetOf(byStep["tmux-free"]), "=w3-drill");
+  // pane-target commands — MUST carry the trailing colon
+  for (const step of ["pipe-pane", "seed", "submit"]) {
+    assert.equal(targetOf(byStep[step]), "=w3-drill:", `${step} must use the pane-target form`);
+  }
+  // `new-session -s` takes a bare NAME, not a target — no '=' at all.
+  assert.equal(byStep["new-session"][byStep["new-session"].indexOf("-s") + 1], "w3-drill");
+});
+
+// REGRESSION (live drill, 2026-07-27): the seed-confirmation compared the raw
+// directive tail against the raw pane. The claude input box soft-wraps and indents
+// a long directive, and `capture-pane -J` does not rejoin those lines, so the tail
+// never matched and a PERFECTLY SEEDED session was aborted as "seed not confirmed".
+// The pane text below is copied verbatim from that live session.
+ok("seed confirmation survives the TUI's soft-wrapping + indentation", () => {
+  const plan = accept({ name: "w3-drill", branch: "feat/w3-drill" });
+  const REAL_PANE = [
+    "────────────────────────────────────────────────────────────────────────────────",
+    "❯ Read ./ops/prompts/PROMPT_fleet_conventions.md then",
+    "  ./ops/prompts/PROMPT_fleet_conventions.md and implement it on this branch    ",
+    "  (feat/w3-drill). Validate, then STOP and report. Do not begin until the       ",
+    "  operator confirms.            ",
+    "────────────────────────────────────────────────────────────────────────────────",
+    "  ⏵⏵ bypass permissions on (shift+tab to cycle)                      /rc active",
+  ].join("\n");
+  const mark = seedMark(plan.directive);
+  assert.ok(!REAL_PANE.includes(mark), "precondition: the raw pane must NOT contain the raw tail (that was the bug)");
+  assert.ok(normalizePane(REAL_PANE).includes(mark), "normalized pane must contain the normalized tail");
+});
+ok("seed confirmation still REJECTS a truncated or partial paste", () => {
+  const plan = accept({ name: "w3-drill", branch: "feat/w3-drill" });
+  const mark = seedMark(plan.directive);
+  const TRUNCATED = "❯ Read ./ops/prompts/PROMPT_fleet_conventions.md then\n  ./ops/prompts/PROMPT_fleet";
+  assert.ok(!normalizePane(TRUNCATED).includes(mark), "a partial seed must not be accepted");
+  assert.ok(!normalizePane("").includes(mark), "an empty pane must not be accepted");
+});
+ok("normalizePane strips ANSI and collapses whitespace", () => {
+  assert.equal(normalizePane("[31ma[0m   b\n\n  c  "), "a b c");
+  assert.equal(normalizePane(null), "");
+  assert.equal(seedMark("x".repeat(100)).length, 32);
+});
+
 ok("pane log path is metacharacter-free before it is interpolated", () => {
   assert.ok(SAFE_LOG_PATH_RE.test("/logs/mcv2-w3-selftest.log"));
   assert.ok(!SAFE_LOG_PATH_RE.test("/logs/a b.log"));
