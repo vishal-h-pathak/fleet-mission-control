@@ -87,7 +87,7 @@ export async function getInboxGroups(): Promise<InboxGroups> {
       `id, name, status, project, repo, branch, worktree, model, prompt_ref,
        directive, last_message, rc_url, pr_url, dispatched_at, started_at,
        ended_at, created_at, updated_at,
-       fleet_waves ( name ), fleet_machines ( name )`,
+       fleet_waves ( name ), fleet_machines!fleet_sessions_machine_id_fkey ( name )`,
     )
     .in("status", INBOX_STATUSES)
     .order("updated_at", { ascending: false })
